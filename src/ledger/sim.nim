@@ -429,6 +429,14 @@ proc ringThreads*(sim: Sim): seq[(int, int, float)] =
       if inCount < RingMinMeetings:
         continue
       let inMean = inSum / inCount.float
+      ## `outCount == 0` is unreachable in play and the 0.0 is only a total
+      ## function's return value, not a rule: reaching this line needs
+      ## `inCount >= 2`, and the schedule never repeats a pair in consecutive
+      ## rounds (drawSchedule's resample, asserted in tests/test_sim.nim
+      ## :93-106), so a pair that has met twice is at least 7 rounds apart and
+      ## each member carries at least 6 meetings with other seats. Only a
+      ## hand-built history can get here, and there 0.0 reads as "no outside
+      ## record to compare against", which flags the pair on `inMean` alone.
       let outMean = if outCount == 0: 0.0 else: outSum / outCount.float
       let delta = inMean - outMean
       if inMean >= RingInThreshold and delta >= RingDeltaThreshold:

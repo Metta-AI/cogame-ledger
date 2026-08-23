@@ -200,7 +200,9 @@ which is set by its meetings with strangers.
 
 - `inMean(a, b)` = mean over their mutual meetings of `(payoff_a + payoff_b) / 2`;
 - `outMean(a, b)` = mean of the two members' own payoffs over all of their meetings that were
-  *not* with each other;
+  *not* with each other; `0.0` when there are none, which the schedule makes unreachable in play
+  (a pair that has met twice is at least 7 rounds apart, so each member carries at least 6 other
+  meetings) and which only a hand-built history can reach;
 - `delta = inMean - outMean` (coins, reported to one decimal).
 
 The pair is **flagged** when it met `>= 2` times, `inMean >= 6.0` and `delta >= 3.0`. A **ring**
