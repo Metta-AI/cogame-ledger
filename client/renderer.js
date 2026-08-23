@@ -660,6 +660,11 @@
   // The gossip rail and the ring caption are DOM, inside #board-wrap and
   // therefore above the transport band, never in it. Being DOM is what lets
   // the 480 px media query collapse the rail so the tables stay readable.
+  //
+  // A RING is a connected component of size >= 3 in the flagged graph, the
+  // same definition the sim applies in ringComponents (src/ledger/sim.nim
+  // :437-463) — a single flagged pair is a thread, not a ring, and gets its
+  // thread drawn and its feed line without a cartel caption.
   function ringGroups(rings) {
     var parent = {};
     function find(x) {
@@ -681,6 +686,8 @@
     });
     return Object.keys(groups).map(function (key) {
       return groups[key].sort(function (a, b) { return a - b; });
+    }).filter(function (group) {
+      return group.length >= 3;
     });
   }
 

@@ -678,8 +678,11 @@ Round spans (`.round-span`, `.round-span.alt`, `.round-sep`) are babel's, unchan
 - **Gossip rail:** the last 5 notes flutter in as small parchment cards on the right
   (`drawParchment`, babel's), each two lines, ellipsized, captioned `Gizmo on Bolt`.
 - **Red threads:** for each entry in `rings`, a red line drawn *under* the avatars between the
-  two seats, thickness `1 + delta / 2` px, with a `RING` tag at the midpoint; the caption
-  `RING: Bolt · Rivet · Piston` names the connected component. Absent when `rings` is empty.
+  two seats, thickness `1 + delta / 2` px, with a `RING` tag at the midpoint. The `#ringnote`
+  caption `RING: Bolt · Rivet · Piston` names each connected component of size `>= 3` — a
+  **ring** as defined above, the same size filter the sim's `ringComponents` applies. A lone
+  flagged pair is a thread, not a ring: it gets its line and its feed entry, and no caption.
+  The caption is absent when there is no such component.
 - **Memo parchment:** under each avatar, a three-line ellipsized card with the seat's latest
   `memo` — the reasoning in public, babel's notes idea kept.
 - Idle before round 1: avatars in place, halos at the neutral 0.5 ring, tables dark.
