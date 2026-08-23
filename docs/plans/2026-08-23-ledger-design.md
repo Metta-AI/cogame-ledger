@@ -624,10 +624,12 @@ babel's names because the whole stack, including `tools/build_replay_viewer.sh` 
   / `#feed` / `#loading` elements in the same nesting, never a from-scratch page that reuses the
   ids (cogame-gridlock, 2026-08-23). The appended block is a `<div id="gossip-rail">` inside
   `#board-wrap` for the gossip cards and a `<div id="ringnote">` for the ring caption.
-- **Removed from the starter's pages:** nothing structural. The only starter elements deleted are
-  the wordmark's inner text (`BA<span>BEL</span>` → `LED<span>GER</span>`) and babel's glyph-font
-  `@font-face` fallback stack in `chrome.css`, which existed only for the Dingbats alphabet
-  Ledger does not have.
+- **Removed from the starter's pages:** nothing structural, and nothing at all from
+  `chrome.css` — it is strictly append-only (one hunk after babel's last line, zero deletions,
+  zero modifications), so babel's `@font-face` for `rajdhani` at `chrome.css:9` stays, because
+  `data/font.ttf` still ships and `renderer.js`'s `GLYPH_FONT` still names it. The only starter
+  element deleted anywhere is the wordmark's inner text in the pages
+  (`BA<span>BEL</span>` → `LED<span>GER</span>`).
 - **Zoom:** the plaza is a **fixed arena** that always fits the frame, so `#viewpanel` (zoom bar
   + minimap) is **dropped entirely** — babel has none to begin with and none is added.
 
