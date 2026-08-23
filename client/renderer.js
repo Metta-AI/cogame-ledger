@@ -192,24 +192,48 @@
 
   // ---- The plaza -----------------------------------------------------------
 
+  // A seat is not just its sprite: a role tag sits above it and the alias,
+  // the median and the memo parchment sit below. The ring has to be solved
+  // against the whole BLOCK or the bottom two avatars lose their parchments
+  // off the edge of the canvas.
+  function seatBlockAbove(size) {
+    return size * 0.62;
+  }
+
+  function seatBlockBelow(size) {
+    var scale = size / SEAT_BASE;
+    return size * 0.72 + 30 * scale + noteHeight(scale);
+  }
+
   function computeLayout(width, height) {
     // A fixed octagonal arena, solved per frame so it always fits: eight
     // avatar posts on the outer ring, four tables on the inner one. Callers
     // embed this viewer at wildly different sizes (the softmax.com featured
-    // match is ~360 px wide), so every size is a fraction of the smaller
-    // dimension rather than a constant.
-    var margin = Math.max(6, Math.min(width, height) * 0.03);
-    var span = Math.max(80, Math.min(width - 2 * margin, height - 2 * margin));
-    var size = Math.max(22, Math.min(SEAT_BASE, span * 0.155));
-    var scale = size / SEAT_BASE;
+    // match is ~360 px wide), so the seat size shrinks until the ring, the
+    // seat blocks and the margins all fit rather than being assumed to.
+    var margin = Math.max(6, Math.min(width, height) * 0.025);
+    var size = Math.min(SEAT_BASE, Math.min(width, height) * 0.15);
+    var ring = 0;
+    for (var attempt = 0; attempt < 40; attempt++) {
+      var vertical = (height - 2 * margin - seatBlockAbove(size) - size -
+        seatBlockBelow(size)) / 2;
+      var horizontal = (width - 2 * margin - size * 1.95) / 2;
+      ring = Math.min(vertical, horizontal);
+      if (ring >= size * 1.05 || size <= 22) break;
+      size *= 0.94;
+    }
+    size = Math.max(22, size);
+    // Never let the ring collapse into the tables, even in a frame too short
+    // to hold the whole block: a clipped parchment beats overlapping cogs.
+    ring = Math.max(size * 0.95, ring);
     return {
       cx: width / 2,
-      cy: height / 2,
-      span: span,
-      ring: span * 0.375,
-      inner: span * 0.165,
+      cy: margin + seatBlockAbove(size) + size / 2 + ring,
+      span: Math.min(width, height),
+      ring: ring,
+      inner: Math.max(size * 0.9, ring * 0.44),
       size: size,
-      scale: scale,
+      scale: size / SEAT_BASE,
       width: width,
       height: height
     };

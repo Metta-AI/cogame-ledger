@@ -658,3 +658,24 @@ button.beat-marker:focus-visible {
   text-align: center;
 }
 .end-rings div { margin-top: 3px; }
+
+/* ---------- scorebug fit: eight plates in one band ---------- */
+/* Eight plates across is a lot of plate. Nothing may bleed into its
+   neighbour, so the plate clips, the alias is the only part that flexes, and
+   the decorations drop out in order of how little they carry: the subgame
+   tag first, then the `median` label, then the pip strip. */
+.plate {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.plate-score { white-space: nowrap; }
+.plate-pips { max-width: 5em; overflow: hidden; }
+.plate-tag {
+  max-width: 5.2em;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+@media (max-width: 1440px) { .plate-tag { display: none; } }
+@media (max-width: 1180px) { .plate-pips { display: none; } }
+@media (max-width: 980px) { .plate-label { display: none; } }
