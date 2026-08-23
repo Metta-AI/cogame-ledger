@@ -97,7 +97,13 @@ ultimatum supply the asymmetric-role texture the idea asks for.
 **first mover** (investor / proposer) and a **second mover** (trustee / responder). The first
 mover is the pair member with fewer first-mover assignments so far in the schedule being built;
 a tie is broken by the seeded RNG. Assignment happens in pair order 0..3 while the schedule is
-drawn, so across an episode no seat's first-mover count differs from another's by more than 1.
+drawn, so the guarantee is **local, not global**: at every asymmetric meeting the seat that goes
+first has no *more* first-mover assignments than its partner at that point, and no seat is ever
+first more often than it plays asymmetric subgames. A global "±1 across the episode" balance is
+**not** available and is not claimed: how many asymmetric meetings a seat draws is itself random
+(the subgame is drawn per pairing), so a seat drawn into few of them ends below another by more
+than one. Measured over 10 000 seeds × `rounds` in `{4, 7, 14, 28}`, 58 % of episodes have a
+spread above 1 and the worst spread is 5.
 
 **One move per seat per round — the strategy method.** Trust and ultimatum are sequential games.
 Ledger resolves them with the standard experimental-economics **strategy method**: the second
@@ -801,8 +807,11 @@ re-derived in the browser by the same Nim `sim` module the server ran.
 1. **Schedule.** For seeds `[1, 7, 42, 1234]` and `rounds` in `{4, 7, 14, 28}`: every round is a
    perfect matching of all 8 seats (each seat appears exactly once across the 4 pairs); at
    `rounds = 14` every unordered pair meets **exactly twice**; for any `rounds`, no pair meets
-   more than `ceil(rounds / 7)` times; no pair meets in consecutive rounds; each seat's
-   first-mover count over asymmetric subgames differs from any other seat's by at most 1.
+   more than `ceil(rounds / 7)` times; no pair meets in consecutive rounds; and the greedy
+   first-mover rule holds, re-derived from the stored schedule — at every asymmetric meeting the
+   seat that goes first has no more prior first-mover assignments than its partner, no seat is
+   first more often than it plays asymmetric subgames, and the first-mover counts sum to the
+   number of asymmetric meetings. (Not a global ±1 balance; see "Roles" above.)
 2. **Payoff kernels.** The full 2×2 dilemma matrix; `trustPayoffs` over all
    `s in 0..6 × p in {0, 25, 33, 50, 66, 75, 100}` with the invariant `investor + trustee ==
    8 + s`, `returned` never exceeding `2*s`, and half-up rounding at `p = 25, s = 1`;
