@@ -608,14 +608,32 @@ failure, and removes it on a successful load. `tools/ci/viewer_smoke.mjs` gates 
 babel's names because the whole stack, including `tools/build_replay_viewer.sh` and the server's
 `/client/renderer.js` route, refers to them.
 
-- `client/renderer.js` is **copied byte-for-byte from cogame-babel** and then edited in exactly
-  two places: the *scene* (everything from `computeLayout` through `drawTag`, plus `boothPairs`)
-  is replaced by the plaza scene below, and the *event vocabulary* helpers (`describeEvent`,
-  `phaseText`, `matchHeader`, `updateScorebug`, `updateEndscreen`, `buildScrub` marker classes)
-  learn Ledger's five event kinds. Everything else — `makeRenderer`, `loadImages`, `ellipsize`,
-  `hexToRgb`/`shade`/`rgba`, `roundRect`, `wrapLines`, `drawParchment`, `makeNameMap`,
-  `applyNames`, `clampName`, `isBaselineFiller`, `renderFeed`, `escapeHtml`, `makeEffects`,
-  `bindFeedToggle`, `stateToView`, `attachLive`, `attachReplay` — is untouched babel code.
+- `client/renderer.js` is **copied byte-for-byte from cogame-babel** and then edited only in the
+  scene and in the event vocabulary. Function by function, against
+  `/workspace/starters/cogame-babel/client/renderer.js`:
+  - **Untouched babel code, byte-identical (22):** `makeRenderer`, `loadImages`, `assetUrl`,
+    `ellipsize`, `hexToRgb`, `shade`, `rgba`, `roundRect`, `wrapLines`, `drawParchment`,
+    `drawTag`, `seatBlock`, `noteHeight`, `seatColor`, `makeNameMap`, `applyNames`, `clampName`,
+    `isBaselineFiller`, `roundBase`, `blockHead`, `escapeHtml`, `reasonLine`.
+  - **Removed with babel's card-and-booth scene (9):** `sceneOf`, `sceneText`, `boothPairs`,
+    `pendingSeat`, `drawSeat`, `drawCard`, `drawShape`, `drawRibbon`, `spellTokens`.
+  - **New, all of them the plaza scene, the two DOM overlays or the transport measurement (26):**
+    `gameName`, `roleName`, `moveText`, `isKind`, `seatBlockAbove`, `seatBlockBelow`, `seatAngle`,
+    `seatHome`, `tableSpot`, `plazaPairs`, `eased`, `drawPlaza`, `drawTable`, `drawVerdict`,
+    `drawHandshake`, `drawKnife`, `drawSnappedCoin`, `drawCoins`, `drawThreads`, `drawAvatar`,
+    `drawHalo`, `ringGroups`, `syncRail`, `meetingText`, `medianOf`, `relayout`.
+  - **Changed babel functions (15)**, each edit confined to Ledger's five event kinds, the two
+    new state fields (`gossip`, `rings`) or the plaza geometry — no starter behaviour is dropped:
+    `computeLayout` and `draw` (the plaza instead of the booths); `describeEvent`, `endText` and
+    `phaseText`, `matchHeader`, `updateScorebug` (the event vocabulary and the median readouts);
+    `buildScrub` (Ledger's beat-marker classes, and a `nameMap` argument for the labels);
+    `renderFeed` (the new event kinds, the per-seat payoff ctx, the `RING` lines and the memo
+    say-lines, plus the `rings` argument of "Readouts" above); `updateEndscreen` (the median /
+    mean / meetings / kind / harsh columns and the ring rows, plus the same `rings` argument);
+    `makeEffects` (`speakAt`/`pickAt` → `roundAt`/`meetAt`/`gossipAt`); `stateToView` (`glyphs` →
+    `gossip`/`rings`/`round`/`nameOf`); `attachLive` and `attachReplay` (they pass the frame's
+    `rings` into the feed and the endcard, and `attachReplay` passes `nameMap` into `buildScrub`);
+    `bindFeedToggle` (the two `relayout()` calls of "Transport rules" below).
 - `client/chrome.css` is copied byte-for-byte and only **appended** to (the new beat-marker
   classes, the plaza-specific plate rules, the `--band` rules below). No existing rule is
   rewritten.

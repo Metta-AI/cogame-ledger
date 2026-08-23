@@ -1,14 +1,18 @@
 // Ledger shared renderer + drivers.
 //
-// This file is cogame-babel's client/renderer.js. Two things are Ledger's:
-// the SCENE (computeLayout through drawTag) is the plaza instead of babel's
-// two speaker/listener booths, and the EVENT-VOCABULARY helpers (describeEvent,
-// phaseText, matchHeader, updateScorebug, updateEndscreen, buildScrub markers,
-// makeEffects) know Ledger's five event kinds. Everything else — makeRenderer,
-// loadImages, ellipsize, hexToRgb/shade/rgba, roundRect, wrapLines,
-// drawParchment, makeNameMap, applyNames, clampName, isBaselineFiller,
-// renderFeed's structure, escapeHtml, bindFeedToggle, stateToView, attachLive,
-// attachReplay — is babel's chrome, carried across.
+// This file is cogame-babel's client/renderer.js. Ledger's edits are the SCENE
+// (computeLayout and draw are the plaza instead of babel's two speaker/listener
+// booths; babel's sceneOf/sceneText/boothPairs/pendingSeat/drawSeat/drawCard/
+// drawShape/drawRibbon/spellTokens are replaced by the plaza helpers below) and
+// the EVENT VOCABULARY: describeEvent, endText, phaseText, matchHeader,
+// updateScorebug, updateEndscreen, buildScrub's marker classes, renderFeed's
+// new lines, makeEffects's timers, stateToView's fields, and the two drivers'
+// calls know Ledger's five event kinds and its gossip/rings state.
+// Byte-identical babel code: makeRenderer, loadImages, assetUrl, ellipsize,
+// hexToRgb/shade/rgba, roundRect, wrapLines, drawParchment, drawTag, seatBlock,
+// noteHeight, seatColor, makeNameMap, applyNames, clampName, isBaselineFiller,
+// roundBase, blockHead, escapeHtml, reasonLine. The full function-by-function
+// list is in docs/plans/2026-08-23-ledger-design.md, "Chrome provenance".
 //
 // One canvas scene (an octagonal plaza: eight avatar posts on the outer ring
 // with a reputation halo and a memo parchment each, four tables in the inner
