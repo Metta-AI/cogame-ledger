@@ -835,8 +835,18 @@ re-derived in the browser by the same Nim `sim` module the server ran.
    round when `done`, applying twice, a move outside range reaching `applyRound` unclamped.
 8. **Endings.** `endEarly` sets `reason == "deadline"` and `done`; a full run sets
    `"complete"`; `resultsJson.reason` is only ever one of those two.
-9. **Replay.** `replayMatch(config, events).len == events.len + 1`; the final frame equals the
-   live sim's `tableStateJson`; a tampered `round` event (a swapped pair) raises; `eventToJson` /
+9. **Replay, frame by frame.** `replayMatch(config, events).len == events.len + 1`; the final
+   frame equals the live sim's `tableStateJson` and `resultsJson`; and then, for **every** `i` in
+   `0 .. events.len`: (a) `frames[i].events == events[0 ..< i]` — every event in the frame was
+   rebuilt by the rules (`beginRound` / `applyMeeting` / `applyGossip` / `settle` each append
+   their own derived event, which `replayMatch` never overwrites with the recorded one), so this
+   compares both payoffs, both moves, both memos, both `scripted` flags, the pairings and the
+   first movers of every tick; (b) `replayMatch(config, events[0 ..< i])` ends on exactly
+   `frames[i]`, so no frame borrows state from an event that has not been played yet; (c) every
+   tick at which the LIVE sim published a state — each round's open, and the settlement — equals
+   the frame with that event count. The round-*close* tick is not a shared tick: the recorded log
+   has no "round closed" event, so `replayMatch` deliberately keeps the round open until the next
+   `round` event arrives. A tampered `round` event (a swapped pair) raises; `eventToJson` /
    `eventFromJson` round-trips every one of the five event kinds with every field.
 10. **Determinism.** The same seed yields identical schedules, subgames, aliases and scripted
     play; different seeds differ.

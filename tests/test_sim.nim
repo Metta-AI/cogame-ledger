@@ -29,10 +29,19 @@ proc simpleMove(game: SubGame, first: bool, seat, round: int): int =
     else: (seat * 13 + round * 7) mod 101
   of sgUltimatum: (seat * 5 + round) mod (Pie + 1)
 
+var liveCheckpoints: seq[(int, string)]
+  ## Refilled by every `playEpisode` call: `(events.len, tableStateJson)` at
+  ## each tick where the LIVE sim publishes a state - the moment each round
+  ## opens, and the moment the episode settles. The replay suite checks the
+  ## re-derived frames against these, so "frame by frame" is measured against
+  ## states the live sim actually passed through, not only against the fold.
+
 proc playEpisode(config: GameConfig, withTalk = true): Sim =
   result = initSim(config)
+  liveCheckpoints = @[]
   while not result.done:
     result.beginRound()
+    liveCheckpoints.add((result.events.len, $result.tableStateJson()))
     var moves: array[Meetings, array[2, int]]
     var flags: array[Meetings, array[2, bool]]
     var notes = newSeq[string](Seats)
@@ -48,6 +57,7 @@ proc playEpisode(config: GameConfig, withTalk = true): Sim =
         notes[seat] = "seat " & $seat & " on round " & $result.round
         memos[seat] = "memo of seat " & $seat & " at round " & $result.round
     result.applyRound(moves, notes, memos, flags)
+  liveCheckpoints.add((result.events.len, $result.tableStateJson()))
 
 suite "schedule":
   test "every round is a perfect matching of all eight seats":
@@ -521,6 +531,40 @@ suite "replay":
     check $frames[^1].resultsJson() == $live.resultsJson()
     ## Mid-replay frames are real states, not repeats of the last one.
     check $frames[1].tableStateJson() != $frames[^1].tableStateJson()
+
+  test "every frame re-derives the prefix it stands for, field by field":
+    ## Frame by frame, not just the endpoint. Three checks per tick:
+    let live = playEpisode(fixture(101, 8))
+    let checkpoints = liveCheckpoints
+    let frames = replayMatch(live.config, live.events)
+    check frames.len == live.events.len + 1
+    var distinctStates: HashSet[string]
+    for i in 0 .. live.events.len:
+      ## 1. The frame's own event log is the recorded prefix - and every one
+      ##    of those events was REBUILT by the rules (beginRound, applyMeeting,
+      ##    applyGossip and settle each append their own derived event, which
+      ##    replayMatch never overwrites with the recorded one), so this
+      ##    compares every field of every event: both payoffs, both moves,
+      ##    both memos, both scripted flags, the pairings and the first movers.
+      check frames[i].events == live.events[0 ..< i]
+      ## 2. Replaying only that prefix lands on exactly that frame: no frame
+      ##    borrows state from an event that has not been played yet.
+      let prefix = replayMatch(live.config, live.events[0 ..< i])
+      check prefix.len == i + 1
+      check $prefix[^1].tableStateJson() == $frames[i].tableStateJson()
+      distinctStates.incl($frames[i].tableStateJson())
+    ## 3. Every tick at which the LIVE sim published a state - each round's
+    ##    open and the settlement - is reproduced exactly by the frame with
+    ##    that event count. (The round-CLOSE tick is not a shared tick: the
+    ##    recorded log has no "round closed" event, so replayMatch keeps the
+    ##    round open until the next `round` event arrives, by design -
+    ##    src/ledger/sim.nim:861-867.)
+    check checkpoints.len == live.config.rounds + 1
+    for (count, state) in checkpoints:
+      check count <= live.events.len
+      check $frames[count].tableStateJson() == state
+    ## The timeline actually moves: one distinct state per round open at least.
+    check distinctStates.len >= live.config.rounds
 
   test "a tampered round event is rejected":
     let live = playEpisode(fixture(101, 8))
