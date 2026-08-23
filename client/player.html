@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ledger — Player View</title>
+<link rel="stylesheet" href="/client/chrome.css">
+</head>
+<body>
+<div id="layout">
+  <div id="stage">
+    <div id="topband">
+      <div id="wordmark">LED<span>GER</span></div>
+      <div id="clock">ROUND 0</div>
+      <div id="topright">
+        <span id="statuschip">connecting…</span>
+        <button id="feedtoggle">LOG »</button>
+      </div>
+    </div>
+    <div id="scorebug"></div>
+    <div id="board-wrap">
+      <canvas id="table" width="960" height="640"></canvas>
+      <div id="lightpool"></div>
+      <div id="grain"></div>
+      <div id="endscreen"></div>
+      <!-- ============================================================
+           LEDGER additions to the inherited cogame-babel chrome.
+           Everything else on this page is babel's markup, id for id and
+           nesting for nesting. Both layers live INSIDE #board-wrap, which is
+           the row above #transport, so neither can ever overlay the
+           scrubber.
+           ============================================================ -->
+      <div id="gossip-rail"></div>
+      <div id="ringnote"></div>
+    </div>
+    </div>
+  <div id="feed"></div>
+</div>
+<script src="/client/renderer.js"></script>
+<script>
+  var canvas = document.getElementById("table");
+  function fit() {
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+  }
+  window.addEventListener("resize", fit);
+  window.addEventListener("load", fit);
+  fit();
+  LedgerRenderer.bindFeedToggle(document.getElementById("feedtoggle"));
+  var params = new URLSearchParams(location.search);
+  LedgerRenderer.attachLive({
+    canvas: canvas,
+    feed: document.getElementById("feed"),
+    status: document.getElementById("statuschip"),
+    clock: document.getElementById("clock"),
+    scorebug: document.getElementById("scorebug"),
+    endscreen: document.getElementById("endscreen"),
+    assetBase: "/client/assets",
+    wsPath: "/player?slot=" + encodeURIComponent(params.get("slot") || "0") +
+      "&token=" + encodeURIComponent(params.get("token") || ""),
+    onFrame: function (data) {
+      if (data.type === "welcome") {
+        document.getElementById("wordmark").innerHTML =
+          "LED<span>GER</span> — " + data.name;
+      }
+    }
+  });
+</script>
+</body>
+</html>
