@@ -102,12 +102,6 @@
     return first ? move >= 5 : move <= 5;
   }
 
-  // The rings the last drawn frame carried. The endscreen is built once, at
-  // the very end of playback, and its `results` object carries only the COUNT
-  // of flagged pairs — the pairs themselves live in the table state, so the
-  // scene parks them here for the endcard to name.
-  var latestRings = [];
-
   function assetUrl(base, name) {
     return base.replace(/\/$/, "") + "/" + name;
   }
@@ -296,7 +290,6 @@
     var fx = view.effects || { roundAt: null, meetAt: [], gossipAt: null };
     var pairs = plazaPairs(view);
     var live = view.phase === "deal" || view.phase === "resolve";
-    latestRings = view.rings || [];
 
     // Floor.
     var floor = images["arena_floor.png"];
@@ -964,10 +957,15 @@
 
   // Renders the full transcript grouped into one section per round.
   // currentIndex (replay) marks how far playback has reached; omit it for
-  // live views.
-  function renderFeed(element, events, nameMap, currentIndex) {
+  // live views. `rings` is the flagged-pair list of the frame being shown —
+  // it is passed in rather than read from the last drawn frame, because a
+  // scrub can move the feed and the canvas to different ticks. `results`
+  // carries only the COUNT of flagged pairs, so the pairs have to come from
+  // the table state.
+  function renderFeed(element, events, nameMap, currentIndex, rings) {
     var live = currentIndex === undefined;
     var limit = live ? events.length : currentIndex;
+    var ringList = rings || [];
     var base = roundBase(events);
     var html = "";
     var lastBlock = null;
@@ -995,7 +993,7 @@
       // The ring findings land just before the final line: they are an
       // observation about the episode, never a rescoring of it.
       if (event.kind === "end") {
-        latestRings.forEach(function (ring) {
+        ringList.forEach(function (ring) {
           html += '<div class="feed-line feed-ring' +
             (i >= limit ? " feed-future" : "") + '">' +
             escapeHtml("RING: " + clampName(nameMap.seat(ring.a)) + " · " +
@@ -1188,12 +1186,15 @@
   }
 
   // Final standings overlay: verdict up top, ranked rows below, and the ring
-  // findings under them — published, never scored.
-  function updateEndscreen(container, results, show, nameMap) {
+  // findings under them — published, never scored. `rings` is the flagged-pair
+  // list of the frame the endcard is being built over; `results` carries only
+  // their count.
+  function updateEndscreen(container, results, show, nameMap, rings) {
     if (!container) return;
     container.classList.toggle("show", !!show);
     if (!show || !results || container.dataset.built === "yes") return;
     container.dataset.built = "yes";
+    var ringList = rings || [];
     var names = (results.names || []).map(function (name, i) {
       return nameMap ? nameMap.seat(i) : name;
     });
@@ -1247,9 +1248,9 @@
         cell(harsh[i] || 0);
     });
     html += "</div>";
-    if (latestRings.length) {
+    if (ringList.length) {
       html += '<div class="end-rings">';
-      latestRings.forEach(function (ring) {
+      ringList.forEach(function (ring) {
         html += "<div>" + escapeHtml("RING: " +
           clampName(nameMap ? nameMap.seat(ring.a) : "Seat " + ring.a) +
           " · " +
@@ -1338,7 +1339,7 @@
               effects.absorb(latest.events || []);
               if (options.feed) {
                 renderFeed(options.feed, latest.events || [], nameMap,
-                  undefined);
+                  undefined, latest.rings || []);
               }
               if (options.clock) {
                 options.clock.textContent =
@@ -1347,7 +1348,8 @@
               updateScorebug(options.scorebug, latest, nameMap);
             }
             if (data.type === "final") {
-              updateEndscreen(options.endscreen, data, true, nameMap);
+              updateEndscreen(options.endscreen, data, true, nameMap,
+                latest ? latest.rings || [] : []);
             }
             if (latest && (latest.done || latest.gameDone)) {
               setStatus("final", false);
@@ -1562,7 +1564,14 @@
           effects.reset();
         }
         effects.absorb(events.slice(0, index), jumped);
-        if (options.feed) renderFeed(options.feed, events, nameMap, index);
+        // The flagged pairs of the frame this index re-derives to — the same
+        // state the canvas is about to be drawn from — so the feed's and the
+        // endcard's RING lines describe the tick the viewer is looking at,
+        // including after a scrub back to an earlier tick.
+        var rings = currentState().rings || [];
+        if (options.feed) {
+          renderFeed(options.feed, events, nameMap, index, rings);
+        }
         if (options.label) {
           options.label.textContent = index + " / " + events.length;
         }
@@ -1572,7 +1581,7 @@
         }
         updateScorebug(options.scorebug, currentState(), nameMap);
         updateEndscreen(options.endscreen, payload.results,
-          index >= events.length && events.length > 0, nameMap);
+          index >= events.length && events.length > 0, nameMap, rings);
       }
       setIndex(0, true);
 

@@ -705,7 +705,11 @@ Round spans (`.round-span`, `.round-span.alt`, `.round-sep`) are babel's, unchan
   Kind outcomes carry `feed-score seatN`.
 - **Endcard:** columns `median`, `mean`, `meetings`, `kind`, `harsh`; verdict = the top seat's
   alias + `TOPS THE LEDGER` (or `ALL LEVEL`); title `FINAL — n ROUNDS`; a reason line when
-  `reason == "deadline"`; and the ring findings, one line per flagged pair.
+  `reason == "deadline"`; and the ring findings, one line per flagged pair. `results` carries
+  only `ringPairs` (a count), so the feed's and the endcard's `RING` lines take their pair list
+  from the flagged pairs of **the frame being shown** — `renderFeed` and `updateEndscreen` are
+  passed `currentState().rings`, the same state the canvas is drawn from, never a value left
+  behind by whatever frame was drawn last.
 - **360 px legibility is a hard requirement** (the softmax.com featured-match iframe is ~360 px):
   `.plate-name { flex: 1 1 auto; min-width: 3.2em; }`, plate labels hidden under `640px`, the
   plaza's alias plates drawn at `--hudscale`-scaled sizes with a minimum 11 px font, and the
