@@ -1,0 +1,7 @@
+services:
+  ledger:
+    image: coworld-ledger:latest
+    platform: linux/amd64
+    build:
+      context: .
+      network: host
