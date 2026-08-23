@@ -122,9 +122,10 @@ a mixed bag of subgames meaningful.
 Investor sends `s` (integer 0..6); the trustee receives `2*s`; the trustee's committed return
 percent is `p` (integer 0..100). `returned = (2*s*p + 50) div 100` (round half up), clamped to
 `0 .. 2*s`. Payoffs: **investor = `6 - s + returned`**, **trustee = `2 + 2*s - returned`**.
-Landmarks: full trust and a fair split (`s = 6, p = 50`) → 6 / 6; full trust betrayed
-(`s = 6, p = 0`) → 0 / 14; no trust (`s = 0`) → 6 / 2. Coin invariant for tests:
-`investor + trustee == 8 + s`.
+Landmarks: an even split of the pot (`s = 4, p = 50`) → 6 / 6 — the coin invariant below fixes
+the pot at `8 + s`, so 6 / 6 is reachable only at `s = 4`; full trust with a fair split
+(`s = 6, p = 50`) → 6 / 8; full trust betrayed (`s = 6, p = 0`) → 0 / 14; no trust (`s = 0`)
+→ 6 / 2. Coin invariant for tests: `investor + trustee == 8 + s`.
 
 *ULTIMATUM* — pie 12 coins. Proposer offers `o` (integer 0..12) to the responder; the responder's
 committed minimum acceptable offer is `m` (integer 0..12). If `o >= m`: **proposer = `12 - o`,

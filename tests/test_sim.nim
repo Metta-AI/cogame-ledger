@@ -169,10 +169,8 @@ suite "payoff kernels":
         let returned = investor - (InvestorEndowment - sent)
         check returned >= 0
         check returned <= 2 * sent
-    ## Landmarks. Full trust with a fair split is s = 4, p = 50: the pot is
-    ## 8 + s coins, so 6 / 6 is only reachable at s = 4. (The design note's
-    ## text names s = 6, p = 50 here, which its own formula and its own
-    ## invariant make 6 / 8 - the formula and the invariant win.)
+    ## Landmarks. The pot is 8 + s coins, so 6 / 6 is reachable only at
+    ## s = 4, p = 50; sending everything at a fair split pays 6 / 8.
     check trustPayoffs(4, 50) == (6, 6)
     check trustPayoffs(6, 50) == (6, 8)
     check trustPayoffs(6, 0) == (0, 14)
