@@ -634,6 +634,38 @@ babel's names because the whole stack, including `tools/build_replay_viewer.sh` 
     `gossip`/`rings`/`round`/`nameOf`); `attachLive` and `attachReplay` (they pass the frame's
     `rings` into the feed and the endcard, and `attachReplay` passes `nameMap` into `buildScrub`);
     `bindFeedToggle` (the two `relayout()` calls of "Transport rules" below).
+**Board-first revision (2026-08-23).** The first build shipped and was unreadable: the eight seat
+blocks overlapped, the memo parchments outshouted the game, and the meeting — the only thing
+actually happening in a round — was the smallest element in the frame. The revision keeps the
+plaza and the whole Ink & Print vocabulary and changes what a post carries and how a meeting is
+drawn. Against the provenance list above:
+
+- **Removed (7):** `seatBlock`, `noteHeight`, `seatBlockAbove`, `seatBlockBelow`, `drawParchment`,
+  `wrapLines`, `drawTable`, `tableSpot`, `drawHalo`. The memo parchment leaves the canvas (it is
+  in the log), and the four inner-ring tables are replaced by lines between the posts.
+- **New (10):** `postReach`, `plaqueBox`, `plaqueSpots`, `nudgeClear`, `leaderFoot`,
+  `trimSegment`, `drawMeetingLine`, `drawPlaque`, `drawAliasPlate`, `drawGauge`, `isBroken`,
+  `pendingText`.
+- **Changed (5):** `computeLayout` (the ring is the invariant and the cog shrinks to fit it; the
+  plaza stretches into a non-square frame up to `ECCENTRIC`), `draw` (posts, then plaques over
+  them; no per-round slide), `drawAvatar` (gauge + sprite + one radial alias plate),
+  `drawVerdict` (the same four shapes, now in the plaque header), `drawThreads` (the tag says
+  FLAGGED, on the curve rather than on the chord it bows away from), `updateScorebug` (ranked by
+  median, tie-broken on the mean the way `updateEndscreen` breaks it, with a conduct bar in place
+  of the pip strip).
+
+`MIN_RING = 2.6` cogs is the load-bearing constant: it is the larger of the two floors the scene
+needs — adjacent gauges clear each other above `(2 * GAUGE_R) / (2 * sin(pi/8))` = 1.62 cogs, and
+a quadrant plaque clears the diagonal post above about 2.4. Nothing may lower it without a frame
+where eight posts overlap again.
+
+`client/chrome.css` is no longer append-only: the ledger section now REPLACES the plate rules
+(`.plate-rank` / `.plate-row` / `.plate-bar` in place of `.plate-pip` / `.plate-label` /
+`.plate-tag`, whose combined width exceeded the plate at the viewer's own 1280px target and was
+being clipped by `.plate{overflow:hidden}`), moves `#gossip-rail` from an overlay at
+`top:10 right:10` — directly over the upper-right posts — to a column beside the plaza, and turns
+`#ringnote` into the findings panel opposite it.
+
 - `client/chrome.css` is copied byte-for-byte and only **appended** to (the new beat-marker
   classes, the plaza-specific plate rules, the `--band` rules below). No existing rule is
   rewritten.

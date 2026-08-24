@@ -9,18 +9,48 @@
 // new lines, makeEffects's timers, stateToView's fields, and the two drivers'
 // calls know Ledger's five event kinds and its gossip/rings state.
 // Byte-identical babel code: makeRenderer, loadImages, assetUrl, ellipsize,
-// hexToRgb/shade/rgba, roundRect, wrapLines, drawParchment, drawTag, seatBlock,
-// noteHeight, seatColor, makeNameMap, applyNames, clampName, isBaselineFiller,
-// roundBase, blockHead, escapeHtml, reasonLine. The full function-by-function
-// list is in docs/plans/2026-08-23-ledger-design.md, "Chrome provenance".
+// hexToRgb/shade/rgba, roundRect, drawTag, seatColor, makeNameMap, applyNames,
+// clampName, isBaselineFiller, roundBase, blockHead, escapeHtml, reasonLine.
+// The full function-by-function list is in
+// docs/plans/2026-08-23-ledger-design.md, "Chrome provenance", and the
+// board-first revision of the scene is the section under it.
 //
-// One canvas scene (an octagonal plaza: eight avatar posts on the outer ring
-// with a reputation halo and a memo parchment each, four tables in the inner
-// ring where this round's pairs meet, resolution icons, flying coins, and red
-// threads between flagged pairs) fed by three drivers: live /global websocket,
-// live /player websocket, and replay (from the game's /replay websocket or the
-// static wasm bundle). All state derivation happens server-side / wasm-side;
-// this file only draws state objects:
+// THE SCENE, board-first revision (2026-08-23)
+// --------------------------------------------
+// One canvas scene fed by three drivers: live /global websocket, live /player
+// websocket, and replay (from the game's /replay websocket or the static wasm
+// bundle). An octagonal plaza holds eight POSTS, and this round's four
+// MEETINGS are drawn as lines between the posts that are playing them:
+//
+//   post     reputation gauge (an arc you can read a value off), the sprite
+//            inside it, a seat-coloured ground ellipse, and ONE alias plate
+//            placed radially outward carrying the alias and the median.
+//   meeting  a lit line between the two cogs, with a plaque on a leader off
+//            that line: the subgame in words, both committed moves, both
+//            payoffs, and the verdict icon.
+//   thread   a red dashed curve between a flagged pair, tagged FLAGGED at the
+//            curve's midpoint. Rings of three or more are named in the
+//            findings panel.
+//
+// What this revision removed, and why (each was a measured failure of the
+// first build, not a matter of taste):
+//   - the per-seat memo parchment. Eight bright #f2e8d8 cards of body copy
+//     were the highest-contrast objects on a dark stage and made the seat
+//     block so tall that the ring could not be solved. The memos are in the
+//     log, where they belong.
+//   - the filled reputation halo. Its radius reached 0.8 of a cog on a ring
+//     of 0.95, so the eight glows merged into fog and no value could be read
+//     off one. It is an arc now.
+//   - `ring = Math.max(size * 0.95, ring)`. The old solver gave up and
+//     collapsed the RING when a frame got tight, which is what put eight seat
+//     blocks on top of each other. The ring is the invariant now (MIN_RING)
+//     and the cog shrinks until it holds.
+//   - the four inner-ring tables, the 0.42 slide toward them, the role tag
+//     over each cog, and the alias/median drawn under every cog AND again in
+//     the plate row.
+//
+// All state derivation happens server-side / wasm-side; this file only draws
+// state objects:
 //   {seats:[{name,score,mean,total,meetings,kind,harsh,halo,partner,game,
 //            role,move,lastPay,memo,scripted} ×8],
 //    round, rounds, roundsPlayed,
@@ -51,6 +81,7 @@
   var PAPER = "#f2e8d8";
   var INK = "#2a1f16";
   var AMBER = "#e8a33d";
+  var PAPER_DIM = "#b8ac98";
   var GHOST = "#8a7f72";
   var CARD_EDGE = "rgba(42, 31, 22, 0.85)";
   var STRIP = "rgba(242, 232, 216, 0.06)";
@@ -166,70 +197,83 @@
   }
 
   // Nominal cog size; everything around a cog is measured as a multiple of
-  // it so the whole seat block scales as one unit.
+  // it so the whole seat post scales as one unit.
   var SEAT_BASE = 84;
-  var NOTE_LINES = 3, NOTE_LINE_H = 12, NOTE_PAD = 6;
-  var LABEL_GUTTER = 16;
+  // A post is the reputation gauge, the sprite inside it, and one alias plate
+  // placed radially outward. That is ALL a post carries: the memo parchment
+  // that used to hang under every cog is gone from the canvas (it was the
+  // highest-contrast object on a dark stage, eight times over, and it made
+  // the seat block so tall the ring could not be solved).
+  var GAUGE_R = 0.62;         // gauge radius, in cogs
+  var PLATE_GAP = 0.11;       // gauge edge -> alias plate, in cogs
+  var PLATE_H = 0.20;         // alias plate line height, in cogs
+  var PLATE_W = 1.45;         // alias plate width budget, in cogs
+  // The ring is the INVARIANT and the cog shrinks until it holds. The old
+  // solver had it the other way round: when the frame got tight it collapsed
+  // the ring (`ring = Math.max(size * 0.95, ring)`) and left eight seat
+  // blocks overlapping, which is the single reason the board was unreadable.
+  //
+  // 2.6 cogs is the larger of the two floors this scene needs:
+  //   posts:   two adjacent gauges clear each other above
+  //            (2 * GAUGE_R) / (2 * sin(pi/8)) = 1.62 cogs;
+  //   plaques: a quadrant plaque (half-diagonal ~1.07 cogs) clears the
+  //            diagonal post above ~2.4 cogs.
+  var MIN_RING = 2.6;
+  // How far the plaza may stretch across a wide frame.
+  var ECCENTRIC = 1.4;
 
-  function noteHeight(scale) {
-    return (NOTE_LINES * NOTE_LINE_H + NOTE_PAD * 2 - 2) * scale;
-  }
-
-  function seatBlock(size) {
-    // The seat block: role tag headroom above the cog, the cog, then name,
-    // score and the notes parchment below it. Parchment room is reserved
-    // even while a seat has no notes: notes arrive without warning.
-    var scale = size / SEAT_BASE;
-    return {
-      w: size * 1.9,
-      above: size * 0.18,
-      cogHalf: size / 2,
-      below: size * 0.62 + 34 * scale + noteHeight(scale)
-    };
-  }
+  // The meeting plaque: the round's four meetings, each drawn ON the line
+  // between the two cogs that are playing it.
+  var PLAQUE_W = 2.1, PLAQUE_H = 0.88;
 
   // ---- The plaza -----------------------------------------------------------
 
-  // A seat is not just its sprite: a role tag sits above it and the alias,
-  // the median and the memo parchment sit below. The ring has to be solved
-  // against the whole BLOCK or the bottom two avatars lose their parchments
-  // off the edge of the canvas.
-  function seatBlockAbove(size) {
-    return size * 0.62;
-  }
-
-  function seatBlockBelow(size) {
+  // How far a post reaches beyond its own centre, outward along the radius.
+  // The alias plate is placed radially, so the reach is the same in every
+  // direction except that a sideways plate spends its budget on width.
+  function postReach(size, sideways) {
     var scale = size / SEAT_BASE;
-    return size * 0.72 + 30 * scale + noteHeight(scale);
+    var gauge = size * GAUGE_R;
+    return sideways ?
+      gauge + size * PLATE_GAP + size * PLATE_W :
+      gauge + size * PLATE_GAP + size * PLATE_H * 2;
   }
 
   function computeLayout(width, height) {
-    // A fixed octagonal arena, solved per frame so it always fits: eight
-    // avatar posts on the outer ring, four tables on the inner one. Callers
-    // embed this viewer at wildly different sizes (the softmax.com featured
-    // match is ~360 px wide), so the seat size shrinks until the ring, the
-    // seat blocks and the margins all fit rather than being assumed to.
+    // Solved per frame, and solved the right way round: the ring never
+    // collapses into the posts, the cog shrinks until the ring, the posts and
+    // the margins all fit. Callers embed this viewer at wildly different
+    // sizes (the softmax.com featured match is ~360 px wide), so the only
+    // thing held fixed is that two posts never touch.
     var margin = Math.max(6, Math.min(width, height) * 0.025);
-    var size = Math.min(SEAT_BASE, Math.min(width, height) * 0.15);
+    var size = Math.min(SEAT_BASE, Math.min(width, height) * 0.165);
     var ring = 0;
-    for (var attempt = 0; attempt < 40; attempt++) {
-      var vertical = (height - 2 * margin - seatBlockAbove(size) - size -
-        seatBlockBelow(size)) / 2;
-      var horizontal = (width - 2 * margin - size * 1.95) / 2;
+    var horizontal = 0;
+    var vertical = 0;
+    for (var attempt = 0; attempt < 60; attempt++) {
+      vertical = (height - 2 * margin) / 2 - postReach(size, false);
+      horizontal = (width - 2 * margin) / 2 - postReach(size, true);
       ring = Math.min(vertical, horizontal);
-      if (ring >= size * 1.05 || size <= 22) break;
+      if (ring >= size * MIN_RING || size <= 18) break;
       size *= 0.94;
     }
-    size = Math.max(22, size);
-    // Never let the ring collapse into the tables, even in a frame too short
-    // to hold the whole block: a clipped parchment beats overlapping cogs.
-    ring = Math.max(size * 0.95, ring);
+    size = Math.max(18, size);
+    ring = Math.max(size * MIN_RING, ring);
+    // A replay pane is rarely square -- a desktop replay is about 2:1 and
+    // the featured-match iframe is taller than it is wide -- and a circular
+    // plaza in either leaves half the board empty. Stretch the ring into
+    // whatever space is spare on each axis, up to ECCENTRIC. Stretching
+    // along one axis only ever WIDENS every adjacent-post gap, so the
+    // clearance the ring floor buys survives it.
+    var ringX = Math.max(ring, Math.min(horizontal, ring * ECCENTRIC));
+    var ringY = Math.max(ring, Math.min(vertical, ring * ECCENTRIC));
     return {
       cx: width / 2,
-      cy: margin + seatBlockAbove(size) + size / 2 + ring,
+      cy: height / 2,
       span: Math.min(width, height),
       ring: ring,
-      inner: Math.max(size * 0.9, ring * 0.44),
+      ringX: ringX,
+      ringY: ringY,
       size: size,
       scale: size / SEAT_BASE,
       width: width,
@@ -244,28 +288,126 @@
   function seatHome(layout, index) {
     var a = seatAngle(index);
     return {
-      x: layout.cx + Math.cos(a) * layout.ring,
-      y: layout.cy + Math.sin(a) * layout.ring
+      x: layout.cx + Math.cos(a) * layout.ringX,
+      y: layout.cy + Math.sin(a) * layout.ringY
     };
   }
 
-  // Where a pair meets: the inner ring, on the bearing between its two posts.
-  // Diametrically opposite posts cancel out, so fall back to one of them.
-  function tableSpot(layout, a, b) {
-    var aa = seatAngle(a);
-    var ab = seatAngle(b);
-    var x = (Math.cos(aa) + Math.cos(ab)) / 2;
-    var y = (Math.sin(aa) + Math.sin(ab)) / 2;
-    var len = Math.sqrt(x * x + y * y);
-    if (len < 0.08) {
-      x = Math.cos(aa + Math.PI / 8);
-      y = Math.sin(aa + Math.PI / 8);
-      len = 1;
-    }
+  // Where a meeting's plaque goes. The four plaques take the four quadrants
+  // of the plaza -- one per quadrant, each assigned to the meeting whose line
+  // passes nearest it -- and a leader ties each plaque back to a point on its
+  // own line. Two meeting lines that cross (opposite seats always do) then
+  // never contend for the same spot, which is what happened when the plaque
+  // sat at the midpoint of its chord.
+  // The plaque box, sized to the RING rather than to the cog: in a frame too
+  // tight to hold four full plaques the plaque shrinks (and its type with
+  // it) instead of piling onto the posts.
+  function plaqueBox(layout) {
+    var w = Math.min(layout.size * PLAQUE_W, layout.ringY * 0.72);
     return {
-      x: layout.cx + x / len * layout.inner,
-      y: layout.cy + y / len * layout.inner
+      w: w,
+      h: w * (PLAQUE_H / PLAQUE_W),
+      scale: w / (SEAT_BASE * PLAQUE_W)
     };
+  }
+
+  // Where a meeting's plaque goes. The four plaques sit on the AXES -- above,
+  // below, left and right of the plaza centre -- one per meeting, each
+  // assigned to the meeting whose line passes nearest it, with a leader back
+  // to a point on that line. Off the axes they would sit on the same bearing
+  // as the diagonal posts, which is what a plaque at its own chord midpoint
+  // did: land exactly where two meeting lines cross.
+  function plaqueSpots(layout, pairs, seatSpots) {
+    // Pushed as far out along each axis as the box will go without reaching
+    // the post at the end of it, so the four plaques spread rather than
+    // clustering in the middle of the plaza.
+    var box = plaqueBox(layout);
+    var pad = layout.size * 0.7;
+    var qx = Math.min(layout.ringX * 0.52,
+      layout.ringX - box.w / 2 - pad);
+    var qy = Math.min(layout.ringY * 0.50,
+      layout.ringY - box.h / 2 - pad);
+    var slots = [
+      { x: layout.cx, y: layout.cy - qy },
+      { x: layout.cx + qx, y: layout.cy },
+      { x: layout.cx, y: layout.cy + qy },
+      { x: layout.cx - qx, y: layout.cy }
+    ];
+    // Greedy nearest-slot assignment: the shortest plaque-to-slot distance
+    // wins its slot first, so the arrangement is stable frame to frame rather
+    // than reshuffling whenever the pair order changes.
+    var wants = [];
+    pairs.forEach(function (pair, index) {
+      var a = seatSpots[pair.a];
+      var b = seatSpots[pair.b];
+      if (!a || !b) return;
+      var mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      slots.forEach(function (slot, si) {
+        wants.push({
+          pair: index,
+          slot: si,
+          d: Math.hypot(slot.x - mid.x, slot.y - mid.y)
+        });
+      });
+    });
+    wants.sort(function (l, r) { return l.d - r.d; });
+    var takenPair = {}, takenSlot = {}, out = [];
+    wants.forEach(function (want) {
+      if (takenPair[want.pair] || takenSlot[want.slot]) return;
+      takenPair[want.pair] = true;
+      takenSlot[want.slot] = true;
+      out[want.pair] = nudgeClear(layout, slots[want.slot], seatSpots);
+    });
+    return out;
+  }
+
+  // Pull a plaque toward the plaza centre until its box clears every cog. The
+  // axis slots clear them already at every ring this layout produces; this is
+  // the guard for the frames where they do not.
+  function nudgeClear(layout, slot, seatSpots) {
+    var box = plaqueBox(layout);
+    var hw = box.w / 2;
+    var hh = box.h / 2;
+    var cog = layout.size * 0.6;
+    var spot = { x: slot.x, y: slot.y };
+    for (var step = 0; step < 12; step++) {
+      var clear = true;
+      for (var seat = 0; seat < seatSpots.length; seat++) {
+        var p = seatSpots[seat];
+        if (!p) continue;
+        var dx = Math.max(Math.abs(p.x - spot.x) - hw, 0);
+        var dy = Math.max(Math.abs(p.y - spot.y) - hh, 0);
+        if (dx * dx + dy * dy < cog * cog) { clear = false; break; }
+      }
+      if (clear) break;
+      spot.x += (layout.cx - spot.x) * 0.1;
+      spot.y += (layout.cy - spot.y) * 0.1;
+    }
+    return spot;
+  }
+
+  // The point on a meeting's line that its plaque's leader attaches to: the
+  // closest point on the segment, so the leader is always the short way home.
+  function leaderFoot(from, to, spot) {
+    var dx = to.x - from.x;
+    var dy = to.y - from.y;
+    var len2 = dx * dx + dy * dy;
+    if (len2 < 1) return { x: from.x, y: from.y };
+    var t = ((spot.x - from.x) * dx + (spot.y - from.y) * dy) / len2;
+    t = Math.max(0.18, Math.min(0.82, t));
+    return { x: from.x + dx * t, y: from.y + dy * t };
+  }
+
+  // Shorten a meeting line at both ends so it starts outside the gauges.
+  function trimSegment(from, to, back) {
+    var dx = to.x - from.x;
+    var dy = to.y - from.y;
+    var len = Math.hypot(dx, dy) || 1;
+    var ux = dx / len, uy = dy / len;
+    return [
+      { x: from.x + ux * back, y: from.y + uy * back },
+      { x: to.x - ux * back, y: to.y - uy * back }
+    ];
   }
 
   // Which seats sit at which table: the state's pairs when it has them (live
@@ -309,71 +451,62 @@
     // The plaza itself: an octagon of flagstones under everything.
     drawPlaza(ctx, layout);
 
-    // Where each seat stands this frame: home post, sliding in toward its
-    // table for the length of the round.
-    var slide = fx.roundAt === null || fx.roundAt === undefined ? 1 :
-      eased((now - fx.roundAt) / SLIDE_MS);
+    // Posts do not move any more. The old build slid a paired cog 42% of the
+    // way to its table, which read as jitter rather than as a pairing; the
+    // pairing is now the LINE, which says it outright.
     var spots = [];
-    var seatPair = [];
-    for (var s = 0; s < 8; s++) {
-      spots.push(seatHome(layout, s));
-      seatPair.push(-1);
-    }
-    pairs.forEach(function (pair, pi) {
-      var table = tableSpot(layout, pair.a, pair.b);
-      [pair.a, pair.b].forEach(function (seat) {
-        if (typeof seat !== "number" || seat < 0 || seat > 7) return;
-        seatPair[seat] = pi;
-        if (!live) return;
-        var home = seatHome(layout, seat);
-        var pull = 0.42 * slide;
-        spots[seat] = {
-          x: home.x + (table.x - home.x) * pull,
-          y: home.y + (table.y - home.y) * pull
-        };
-      });
-    });
+    for (var s = 0; s < 8; s++) spots.push(seatHome(layout, s));
+    var plaques = plaqueSpots(layout, pairs, spots);
 
-    // Red threads first, UNDER the avatars: the cartel is a picture.
+    // Red threads first, UNDER everything: the cartel is a picture.
     drawThreads(ctx, layout, view.rings || [], spots, scale);
 
-    // Tables, resolution icons, flying coins.
+    // This round's four meetings, each drawn as a lit line between the two
+    // cogs playing it, with the plaque on a leader off that line.
     pairs.forEach(function (pair, pi) {
-      var table = tableSpot(layout, pair.a, pair.b);
-      var meetAt = fx.meetAt && fx.meetAt[pi];
-      var age = typeof meetAt === "number" ? now - meetAt : null;
-      drawTable(ctx, table, pair, view, size, scale, live);
-      if (pair.resolved) {
-        var alpha = age === null ? MEET_REST :
-          age < MEET_HOLD_MS ? 1 :
-          Math.max(MEET_REST, 1 - (age - MEET_HOLD_MS) / MEET_FADE_MS *
-            (1 - MEET_REST));
-        drawVerdict(ctx, table, pair, size, scale, alpha);
-        drawCoins(ctx, table, pair, spots, scale, age);
-      }
+      var from = spots[pair.a];
+      var to = spots[pair.b];
+      var spot = plaques[pi];
+      if (!from || !to || !spot) return;
+      if (pair.game === undefined || pair.game === null) return;
+      drawMeetingLine(ctx, from, to, spot, layout, live);
     });
-
-    // Avatars: sprite, halo, alias plate, memo parchment.
+    // Posts: gauge, sprite, seat-coloured ground, alias plate.
     for (var i = 0; i < 8; i++) {
-      drawAvatar(ctx, images, seats[i], i, spots[i], size, scale, {
-        pair: seatPair[i],
-        pairs: pairs,
+      drawAvatar(ctx, images, seats[i], i, spots[i], size, scale, layout, {
         deciding: view.phase === "deal",
         done: !!view.done
       });
     }
 
+    // Plaques last, over the posts: the meeting is the loudest thing here.
+    var box = plaqueBox(layout);
+    pairs.forEach(function (pair, pi) {
+      var spot = plaques[pi];
+      if (!spot || pair.game === undefined || pair.game === null) return;
+      var meetAt = fx.meetAt && fx.meetAt[pi];
+      var age = typeof meetAt === "number" ? now - meetAt : null;
+      var alpha = age === null ? MEET_REST :
+        age < MEET_HOLD_MS ? 1 :
+        Math.max(MEET_REST, 1 - (age - MEET_HOLD_MS) / MEET_FADE_MS *
+          (1 - MEET_REST));
+      drawPlaque(ctx, spot, pair, box, live, pair.resolved ? alpha : 0,
+        seats);
+      if (pair.resolved) drawCoins(ctx, spot, pair, spots, scale, age);
+    });
+
     syncRail(view);
   }
 
   function drawPlaza(ctx, layout) {
-    var r = layout.ring * 1.22;
+    var rx = layout.ringX * 1.22;
+    var ry = layout.ringY * 1.22;
     ctx.save();
     ctx.beginPath();
     for (var i = 0; i < 8; i++) {
       var a = -Math.PI / 2 + (i + 0.5) * Math.PI / 4;
-      var x = layout.cx + Math.cos(a) * r;
-      var y = layout.cy + Math.sin(a) * r;
+      var x = layout.cx + Math.cos(a) * rx;
+      var y = layout.cy + Math.sin(a) * ry;
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.closePath();
@@ -382,72 +515,151 @@
     ctx.strokeStyle = "rgba(242, 232, 216, 0.14)";
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    // The inner court the tables stand on.
-    ctx.beginPath();
-    ctx.arc(layout.cx, layout.cy, layout.inner * 1.9, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(242, 232, 216, 0.08)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
     ctx.restore();
   }
 
-  // A table in the inner ring: the subgame in WORDS plus a role tag per side.
-  function drawTable(ctx, spot, pair, view, size, scale, live) {
-    var w = size * 1.55;
-    var h = size * 0.66;
-    var lit = live && pair.game !== undefined && pair.game !== null;
+  // A meeting, drawn as a LINE between the two cogs playing it: a dark plank
+  // with a lit core, plus the leader that ties the plaque back to the line.
+  // This is the fact the old board never drew -- who is playing whom.
+  function drawMeetingLine(ctx, from, to, spot, layout, lit) {
+    var back = layout.size * GAUGE_R + layout.size * 0.07;
+    var ends = trimSegment(from, to, back);
     ctx.save();
-    ctx.fillStyle = lit ? "rgba(36, 26, 18, 0.92)" : "rgba(18, 13, 9, 0.72)";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(242, 232, 216, 0.12)";
+    ctx.lineWidth = Math.max(3, layout.size * 0.105);
+    ctx.beginPath();
+    ctx.moveTo(ends[0].x, ends[0].y);
+    ctx.lineTo(ends[1].x, ends[1].y);
+    ctx.stroke();
+    ctx.lineCap = "butt";
+    ctx.strokeStyle = lit ? rgba(AMBER, 0.62) : "rgba(242, 232, 216, 0.16)";
+    ctx.lineWidth = Math.max(1, layout.scale * 2);
+    ctx.beginPath();
+    ctx.moveTo(ends[0].x, ends[0].y);
+    ctx.lineTo(ends[1].x, ends[1].y);
+    ctx.stroke();
+    // Leader from the plaque to its own line, with a dot where it lands.
+    var foot = leaderFoot(ends[0], ends[1], spot);
+    ctx.strokeStyle = rgba(AMBER, 0.45);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(foot.x, foot.y);
+    ctx.lineTo(spot.x, spot.y);
+    ctx.stroke();
+    ctx.fillStyle = rgba(AMBER, 0.8);
+    ctx.beginPath();
+    ctx.arc(foot.x, foot.y, Math.max(1.5, 2.5 * layout.scale), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // The plaque: the subgame in WORDS, both committed moves and both payoffs,
+  // one row per seat in that seat's colour. The verdict icon sits in the
+  // header. This is now the largest type on the board, which is the point --
+  // the meeting is the only thing actually happening.
+  function drawPlaque(ctx, spot, pair, box, lit, verdictAlpha, seats) {
+    var w = box.w;
+    var h = box.h;
+    var scale = box.scale;
+    var x = spot.x - w / 2;
+    var y = spot.y - h / 2;
+    var pad = Math.max(4, 8 * scale);
+    ctx.save();
+    ctx.fillStyle = lit ? "rgba(36, 26, 18, 0.94)" : "rgba(18, 13, 9, 0.8)";
     ctx.strokeStyle = lit ? rgba(AMBER, 0.55) : "rgba(242, 232, 216, 0.14)";
     ctx.lineWidth = lit ? 2 : 1;
-    roundRect(ctx, spot.x - w / 2, spot.y - h / 2, w, h, 5 * scale);
+    roundRect(ctx, x, y, w, h, 5 * scale);
     ctx.fill();
     ctx.stroke();
-    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    if (lit) {
-      ctx.font = "700 " + Math.max(9, Math.round(12 * scale)) +
-        "px 'rajdhani', system-ui, sans-serif";
-      ctx.fillStyle = PAPER;
-      ctx.fillText(ellipsize(ctx, gameName(pair.game), w - 8 * scale),
-        spot.x, spot.y - h * 0.12);
-      if (pair.game !== "pd") {
-        ctx.font = "600 " + Math.max(7, Math.round(8.5 * scale)) +
-          "px 'rajdhani', system-ui, sans-serif";
-        ctx.fillStyle = GHOST;
-        ctx.fillText(ellipsize(ctx, roleName(pair.game, true) + " · " +
-          roleName(pair.game, false), w - 6 * scale), spot.x,
-          spot.y + h * 0.28);
-      }
-    } else {
-      ctx.font = "600 " + Math.max(7, Math.round(8.5 * scale)) +
-        "px 'rajdhani', system-ui, sans-serif";
-      ctx.fillStyle = "rgba(242, 232, 216, 0.28)";
-      ctx.fillText("EMPTY", spot.x, spot.y);
+
+    var headY = y + h * 0.21;
+    ctx.textAlign = "left";
+    ctx.font = "700 " + Math.max(9, Math.round(11 * scale)) +
+      "px 'rajdhani', system-ui, sans-serif";
+    ctx.fillStyle = PAPER;
+    ctx.fillText(ellipsize(ctx, gameName(pair.game), w - pad * 2 - 24 * scale),
+      x + pad, headY);
+    if (pair.resolved) {
+      drawVerdict(ctx, x + w - pad - 10 * scale, headY, pair,
+        Math.max(7, 10 * scale), verdictAlpha);
     }
+
+    // One row per seat: alias, the move in words, the payoff in coins.
+    // Before a seat's move is known the row carries its ROLE instead, so a
+    // table that is still deciding says what it is rather than going blank.
+    var rows = [
+      [pair.a, moveText(pair.game, true, pair.moveA) ||
+        pendingText(pair.game, true), pair.payA],
+      [pair.b, moveText(pair.game, false, pair.moveB) ||
+        pendingText(pair.game, false), pair.payB]
+    ];
+    var broken = isBroken(pair);
+    rows.forEach(function (row, index) {
+      var ry = y + h * (0.52 + index * 0.29);
+      var nameW = w * 0.42;
+      ctx.textAlign = "left";
+      ctx.font = "600 " + Math.max(9, Math.round(12 * scale)) +
+        "px 'rajdhani', system-ui, sans-serif";
+      ctx.fillStyle = COLOR_HEX[seatColor(row[0])];
+      var seat = (seats || [])[row[0]] || {};
+      var alias = ellipsize(ctx, clampName(seat.name || ""), nameW);
+      ctx.fillText(alias, x + pad, ry);
+      var moveX = x + pad + ctx.measureText(alias).width + 6 * scale;
+      ctx.font = Math.max(8, Math.round(11 * scale)) +
+        "px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+      ctx.fillStyle = GHOST;
+      var payText = typeof row[2] === "number" ?
+        (broken ? "0" : "+" + row[2]) : "";
+      ctx.textAlign = "right";
+      var payW = 0;
+      if (payText) {
+        ctx.save();
+        ctx.font = "700 " + Math.max(9, Math.round(13 * scale)) +
+          "px 'rajdhani', system-ui, sans-serif";
+        payW = ctx.measureText(payText).width + 8 * scale;
+        ctx.fillStyle = broken || row[2] === 0 ? GHOST : AMBER;
+        ctx.fillText(payText, x + w - pad, ry);
+        ctx.restore();
+      }
+      ctx.textAlign = "left";
+      ctx.fillStyle = PAPER_DIM;
+      ctx.fillText(ellipsize(ctx, row[1], x + w - pad - payW - moveX), moveX,
+        ry);
+    });
     ctx.restore();
   }
 
-  // Both kind: a handshake. One harsh: a knife pointing at the victim. Both
-  // harsh: crossed knives. A rejected ultimatum: a snapped coin.
-  function drawVerdict(ctx, spot, pair, size, scale, alpha) {
+  // What a row says before its move is known. TRUST and ULTIMATUM are
+  // asymmetric, so the role is worth saying; the dilemma has no role (both
+  // seats choose the same two moves), and "EITHER" said nothing.
+  function pendingText(game, first) {
+    return game === "pd" ? "deciding" : roleName(game, first);
+  }
+
+  // A rejected ultimatum: both sides take nothing.
+  function isBroken(pair) {
+    return pair.game === "ultimatum" && pair.payA === 0 && pair.payB === 0;
+  }
+
+  // Both kind: a handshake. One harsh: a knife. Both harsh: crossed knives.
+  // A rejected ultimatum: a snapped coin. Same four shapes as before, drawn
+  // in the plaque header instead of floating over a table.
+  function drawVerdict(ctx, cx, cy, pair, r, alpha) {
     var kindA = isKind(pair.game, true, pair.moveA);
     var kindB = isKind(pair.game, false, pair.moveB);
-    var broken = pair.game === "ultimatum" && pair.payA === 0 &&
-      pair.payB === 0;
-    var r = size * 0.34;
-    var y = spot.y - size * 0.62;
     ctx.save();
-    ctx.globalAlpha = alpha;
-    if (broken) {
-      drawSnappedCoin(ctx, spot.x, y, r);
+    ctx.globalAlpha = Math.max(MEET_REST, alpha);
+    if (isBroken(pair)) {
+      drawSnappedCoin(ctx, cx, cy, r);
     } else if (kindA && kindB) {
-      drawHandshake(ctx, spot.x, y, r);
+      drawHandshake(ctx, cx, cy, r);
     } else if (!kindA && !kindB) {
-      drawKnife(ctx, spot.x - r * 0.45, y, r, -0.5);
-      drawKnife(ctx, spot.x + r * 0.45, y, r, 0.5);
+      drawKnife(ctx, cx - r * 0.45, cy, r, -0.5);
+      drawKnife(ctx, cx + r * 0.45, cy, r, 0.5);
     } else {
-      drawKnife(ctx, spot.x, y, r, kindB ? -0.35 : 0.35);
+      drawKnife(ctx, cx, cy, r, kindB ? -0.35 : 0.35);
     }
     ctx.restore();
   }
@@ -547,21 +759,30 @@
       ctx.quadraticCurveTo(layout.cx, layout.cy, to.x, to.y);
       ctx.stroke();
       ctx.restore();
-      drawTag(ctx, (from.x + to.x) / 2, (from.y + to.y) / 2, "RING",
-        COLOR_HEX.red, scale);
+      // On the CURVE, not the chord: the thread bows through the plaza
+      // centre, so the chord midpoint is exactly where the meeting lines
+      // cross. And a single flagged pair is a thread, not a cartel -- the
+      // RING caption belongs to a component of three or more (ringGroups).
+      drawTag(ctx, (from.x + 2 * layout.cx + to.x) / 4,
+        (from.y + 2 * layout.cy + to.y) / 4, "FLAGGED", COLOR_HEX.red, scale);
     });
   }
 
-  // Sprite, reputation halo, alias plate, and the memo parchment.
-  function drawAvatar(ctx, images, seat, index, pos, size, scale, opts) {
+  // A post: reputation gauge, sprite, seat-coloured ground, alias plate.
+  // The memo parchment that used to hang under every cog is gone -- the
+  // reasoning lives in the log, where it does not outshout the game.
+  function drawAvatar(ctx, images, seat, index, pos, size, scale, layout,
+                      opts) {
     if (!seat || !pos) return;
     var color = seatColor(index);
     var sprite = images["soldier_" + SPRITE_KITS[index % SPRITE_KITS.length] +
       "_front.png"];
 
-    // Halo FIRST, behind the cog: radius and alpha come from the seat's
-    // kind/harsh record. This is the reputation, visible at a glance.
-    drawHalo(ctx, pos, size, typeof seat.halo === "number" ? seat.halo : 0.5);
+    // The gauge FIRST, behind the cog: an arc you can read a value off,
+    // where the old build drew a filled glow that merged with its neighbours
+    // into fog.
+    drawGauge(ctx, pos, size, typeof seat.halo === "number" ? seat.halo : 0.5,
+      opts.deciding && !opts.done);
 
     ctx.save();
     ctx.translate(pos.x, pos.y);
@@ -584,73 +805,91 @@
     ctx.stroke();
     ctx.restore();
 
-    // Everyone decides at the same time, so the "acting" ring is on all eight
-    // seats while the round is open.
-    if (opts.deciding && !opts.done) {
-      ctx.save();
-      ctx.strokeStyle = AMBER;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, size * 0.66, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Role tag over the cog while a round is on.
-    var pair = opts.pair >= 0 ? opts.pairs[opts.pair] : null;
-    if (pair && pair.game) {
-      var tag = roleName(pair.game, pair.a === index);
-      if (pair.game === "pd") tag = gameName(pair.game);
-      drawTag(ctx, pos.x, pos.y - size * 0.58, tag, COLOR_HEX[color], scale);
-    }
-
-    // Alias plate. Never smaller than 11 px: the featured-match iframe is
-    // about 360 px wide and an unreadable plate is an unreadable board.
-    ctx.save();
-    ctx.font = "600 " + Math.max(11, Math.round(13 * scale)) +
-      "px 'rajdhani', system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = PAPER;
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 4;
-    ctx.fillText(ellipsize(ctx, seat.name || "", size * 1.8), pos.x,
-      pos.y + size * 0.66 + 12 * scale);
-
-    // The score, in coins: the MEDIAN, which is the only ranked statistic.
-    ctx.font = "700 " + Math.max(11, Math.round(13 * scale)) +
-      "px 'rajdhani', system-ui, sans-serif";
-    ctx.fillStyle = AMBER;
-    ctx.fillText(Number(seat.score || 0).toFixed(1) + " med", pos.x,
-      pos.y + size * 0.66 + 27 * scale);
-    ctx.restore();
-
-    // Memo parchment: the reasoning in public.
-    var bw = size * 1.9;
-    drawParchment(ctx, pos.x - bw / 2, pos.y + size * 0.66 + 34 * scale, bw,
-      seat.memo || "", scale);
+    drawAliasPlate(ctx, seat, index, pos, size, scale, layout);
   }
 
-  // Gold above 0.7, pale above 0.4, cold grey below.
-  function drawHalo(ctx, pos, size, halo) {
-    var tint = halo > 0.7 ? AMBER : halo > 0.4 ? PAPER : GHOST;
-    var radius = size * (0.52 + 0.28 * Math.max(0, Math.min(1, halo)));
-    var alpha = 0.18 + 0.5 * Math.max(0, Math.min(1, halo));
+  // Alias and median on ONE baseline, placed radially outward from the plaza
+  // centre and end-aligned. Radial placement is what lets eight plates fan
+  // out instead of colliding at the sizes this viewer is embedded at; the
+  // pair of them used to be drawn under the cog AND again in the plate row.
+  function drawAliasPlate(ctx, seat, index, pos, size, scale, layout) {
+    var a = seatAngle(index);
+    var ux = Math.cos(a), uy = Math.sin(a);
+    var sideways = Math.abs(ux) > 0.9;
+    var reach = size * GAUGE_R + size * PLATE_GAP;
+    var x = pos.x + ux * reach;
+    var y = pos.y + uy * reach;
+    var font = Math.max(10, Math.round(14 * scale));
     ctx.save();
-    var glow = ctx.createRadialGradient(pos.x, pos.y, radius * 0.55,
-      pos.x, pos.y, radius);
-    glow.addColorStop(0, rgba(tint, 0));
-    glow.addColorStop(1, rgba(tint, alpha * 0.5));
-    ctx.fillStyle = glow;
+    ctx.font = "600 " + font + "px 'rajdhani', system-ui, sans-serif";
+    var alias = clampName(seat.name || "");
+    var score = Number(seat.score || 0).toFixed(1);
+    var gap = 6 * scale;
+    ctx.font = "700 " + font + "px 'rajdhani', system-ui, sans-serif";
+    var scoreW = ctx.measureText(score).width;
+    ctx.font = "600 " + font + "px 'rajdhani', system-ui, sans-serif";
+    alias = ellipsize(ctx, alias, size * PLATE_W - scoreW - gap);
+    var aliasW = ctx.measureText(alias).width;
+    var total = aliasW + gap + scoreW;
+
+    // Anchor the pair as one run, then align it away from the plaza.
+    var left;
+    if (ux > 0.3) left = x;
+    else if (ux < -0.3) left = x - total;
+    else left = x - total / 2;
+    if (Math.abs(uy) > 0.9) y += uy < 0 ? -font * 0.55 : font * 0.55;
+    // Never let a plate run off the canvas: clamp, do not clip.
+    left = Math.max(3, Math.min(layout.width - total - 3, left));
+
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.shadowColor = "rgba(0,0,0,0.85)";
+    ctx.shadowBlur = 4;
+    ctx.fillStyle = COLOR_HEX[seatColor(index)];
+    ctx.fillText(alias, left, y);
+    ctx.font = "700 " + font + "px 'rajdhani', system-ui, sans-serif";
+    ctx.fillStyle = AMBER;
+    ctx.fillText(score, left + aliasW + gap, y);
+    ctx.restore();
+    void sideways;
+  }
+
+  // Reputation as a VALUE: an arc sweeping the seat's share of meetings
+  // played fair, clockwise from the top. Gold above 0.7, pale above 0.4,
+  // cold grey below -- the same thresholds the halo used, now readable.
+  // The track is deliberately thinner and dimmer than the value, so a seat
+  // with a bad record does not read as a full pale ring.
+  function drawGauge(ctx, pos, size, halo, deciding) {
+    var share = Math.max(0, Math.min(1, halo));
+    var tint = share > 0.7 ? AMBER : share > 0.4 ? PAPER : GHOST;
+    var r = size * GAUGE_R;
+    var weight = Math.max(2, size * 0.045);
+    ctx.save();
+    ctx.strokeStyle = "rgba(242, 232, 216, 0.09)";
+    ctx.lineWidth = weight * 0.55;
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = rgba(tint, alpha);
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+    ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
     ctx.stroke();
+    if (share > 0) {
+      ctx.strokeStyle = tint;
+      ctx.lineWidth = weight * 1.25;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, r, -Math.PI / 2,
+        -Math.PI / 2 + share * Math.PI * 2);
+      ctx.stroke();
+    }
+    // Everyone decides at the same time, so the "acting" marker is on all
+    // eight seats while the round is open. It sits INSIDE the gauge; posts
+    // are spaced to clear the gauge and nothing wider.
+    if (deciding) {
+      ctx.strokeStyle = rgba(AMBER, 0.55);
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, r - weight * 1.8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.restore();
   }
 
@@ -703,90 +942,48 @@
         rail.dataset.html = html;
         rail.innerHTML = html;
       }
+      rail.classList.toggle("show", html.length > 0);
     }
+    // #ringnote is the FINDINGS panel: the legend for the one encoding a
+    // spectator cannot guess (the gauge), plus every flagged pair and every
+    // ring. It sits opposite the gossip rail instead of on top of the plaza,
+    // which is where the rail used to be parked (top:10 right:10, straight
+    // over the upper-right posts).
     var ringnote = document.getElementById("ringnote");
-    if (ringnote) {
-      var groups = ringGroups(view.rings || []);
-      var text = groups.map(function (group) {
-        return "RING: " + group.map(function (seat) {
-          return clampName(nameOf(seat));
-        }).join(" · ");
-      }).join("    ");
-      if (ringnote.dataset.text !== text) {
-        ringnote.dataset.text = text;
-        ringnote.textContent = text;
-        ringnote.classList.toggle("show", text.length > 0);
-      }
-    }
-  }
-
-  function drawParchment(ctx, x, y, w, text, scale) {
-    var pad = NOTE_PAD * scale;
-    var lineH = NOTE_LINE_H * scale;
-    var h = noteHeight(scale);
-    ctx.save();
-    ctx.font = Math.round(10.5 * scale) + "px " + GLYPH_FONT;
-    var lines = text ? wrapLines(ctx, text, w - pad * 2, NOTE_LINES) : [];
-    ctx.fillStyle = text ? "rgba(242, 232, 216, 0.92)" :
-      "rgba(242, 232, 216, 0.10)";
-    ctx.strokeStyle = text ? CARD_EDGE : "rgba(242, 232, 216, 0.18)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash(text ? [] : [3, 3]);
-    roundRect(ctx, x, y, w, h, 3 * scale);
-    ctx.fill();
-    ctx.stroke();
-    ctx.setLineDash([]);
-    // Folded corner.
-    if (text) {
-      ctx.beginPath();
-      ctx.moveTo(x + w - 7 * scale, y);
-      ctx.lineTo(x + w, y + 7 * scale);
-      ctx.lineTo(x + w - 7 * scale, y + 7 * scale);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(42, 31, 22, 0.25)";
-      ctx.fill();
-    }
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    if (text) {
-      ctx.fillStyle = INK;
-      lines.forEach(function (line, i) {
-        ctx.fillText(line, x + pad, y + pad + i * lineH);
+    if (!ringnote) return;
+    var rings = view.rings || [];
+    var findHtml = '<div class="find-legend">ring = share of meetings ' +
+      "played fair</div>";
+    if (rings.length) {
+      findHtml += '<div class="find-title">FLAGGED</div>';
+      rings.slice(0, 4).forEach(function (ring) {
+        findHtml += '<div class="find-row">' +
+          '<span class="' + seatColor(ring.a) + '">' +
+          escapeHtml(clampName(nameOf(ring.a))) + "</span> &amp; " +
+          '<span class="' + seatColor(ring.b) + '">' +
+          escapeHtml(clampName(nameOf(ring.b))) + "</span>" +
+          '<span class="find-delta">+' +
+          Number(ring.delta || 0).toFixed(1) + "</span></div>";
       });
-    } else {
-      ctx.fillStyle = GHOST;
-      ctx.font = "600 " + Math.round(8 * scale) +
-        "px 'rajdhani', system-ui, sans-serif";
-      ctx.fillText("NO NOTES YET", x + pad, y + pad);
+      var groups = ringGroups(rings);
+      groups.forEach(function (group) {
+        findHtml += '<div class="find-ring">RING &middot; ' +
+          group.map(function (seat) {
+            return escapeHtml(clampName(nameOf(seat)));
+          }).join(" &middot; ") + "</div>";
+      });
+      findHtml += '<div class="find-note">Reported, never scored.' +
+        (groups.length ? "" : " One thread is not a cartel.") + "</div>";
     }
-    ctx.restore();
+    if (ringnote.dataset.html !== findHtml) {
+      ringnote.dataset.html = findHtml;
+      ringnote.innerHTML = findHtml;
+    }
+    ringnote.classList.add("show");
   }
 
-  function wrapLines(ctx, text, maxWidth, maxLines) {
-    var words = text.split(/\s+/);
-    var lines = [];
-    var line = "";
-    words.forEach(function (word) {
-      var probe = line ? line + " " + word : word;
-      if (ctx.measureText(probe).width > maxWidth && line) {
-        lines.push(line);
-        line = word;
-      } else {
-        line = probe;
-      }
-    });
-    if (line) lines.push(line);
-    var overflow = lines.length > maxLines;
-    lines = lines.slice(0, maxLines);
-    if (overflow && lines.length) {
-      lines[lines.length - 1] = ellipsize(ctx, lines[lines.length - 1] + "…",
-        maxWidth);
-    }
-    return lines.map(function (l) { return ellipsize(ctx, l, maxWidth); });
-  }
-
-  // A small tag ("SPEAKS", "LEADS") in the seat's colour, pinned over the
-  // cog.
+  // A small paper tag in an accent colour, used for the FLAGGED caption on a
+  // red thread.
   function drawTag(ctx, x, y, text, accent, scale) {
     ctx.save();
     ctx.font = "700 " + Math.round(10 * scale) +
@@ -1149,29 +1346,44 @@
 
   function updateScorebug(container, state, nameMap) {
     if (!container || !state || !state.seats) return;
-    // Every seat decides at the same time, so the "acting" marker is on all
-    // eight while the round is open, not on one.
-    var deciding = state.phase === "deal" && !state.gameDone;
+    // RANKED, because the one statistic Ledger scores is the median and a
+    // leaderboard in seat order is not a leaderboard. Each plate carries the
+    // rank, the alias, the median and a conduct bar -- the same value the
+    // gauge on the board draws, so the two never disagree. The pip strip and
+    // the repeated "median" label are gone: at 1280px they needed about
+    // 217px of a 149px plate and were silently clipped.
+    // Ties break on the mean, the same way updateEndscreen breaks them, so
+    // the plate row and the final standings never disagree about who is
+    // first. Six seats on 6.0 is an ordinary Ledger result.
+    var order = state.seats.map(function (_, index) { return index; });
+    order.sort(function (l, r) {
+      var byScore = Number(state.seats[r].score || 0) -
+        Number(state.seats[l].score || 0);
+      if (byScore) return byScore;
+      var byMean = Number(state.seats[r].mean || 0) -
+        Number(state.seats[l].mean || 0);
+      if (byMean) return byMean;
+      return l - r;
+    });
     var html = "";
-    state.seats.forEach(function (seat, index) {
-      var pips = "";
-      for (var p = 0; p < Math.min(seat.kind || 0, 7); p++) {
-        pips += '<span class="plate-pip"></span>';
-      }
-      for (var q = 0; q < Math.min(seat.harsh || 0, 7); q++) {
-        pips += '<span class="plate-pip hollow"></span>';
-      }
+    order.forEach(function (index, rank) {
+      var seat = state.seats[index];
       var plateName = nameMap ? nameMap.seat(index) : seat.name;
-      var tag = seat.game ? gameName(seat.game) : "";
+      var kind = seat.kind || 0;
+      var harsh = seat.harsh || 0;
+      var played = kind + harsh;
+      var share = played ? kind / played : 0;
+      var band = share > 0.7 ? "good" : share > 0.4 ? "fair" : "poor";
       html += '<div class="plate ' + seatColor(index) + '">' +
+        '<div class="plate-row">' +
+        '<span class="plate-rank">' + (rank + 1) + "</span>" +
         '<span class="plate-name">' + escapeHtml(clampName(plateName)) +
         "</span>" +
-        (deciding ? '<span class="plate-it">▶</span>' : "") +
         '<span class="plate-score">' +
         Number(seat.score || 0).toFixed(1) + "</span>" +
-        '<span class="plate-label">median</span>' +
-        (tag ? '<span class="plate-tag">' + escapeHtml(tag) + "</span>" : "") +
-        '<span class="plate-pips">' + pips + "</span>" +
+        "</div>" +
+        '<div class="plate-bar"><i class="' + band + '" style="width:' +
+        Math.round(share * 100) + '%"></i></div>' +
         "</div>";
     });
     if (container.dataset.html !== html) {

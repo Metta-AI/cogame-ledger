@@ -290,29 +290,6 @@ canvas#table {
 }
 .plate.dead .plate-name { color: var(--ghost); text-decoration: line-through; }
 .plate-score { font-size: 17px; line-height: 1; color: var(--paper); flex: none; }
-.plate-label {
-  font-family: var(--finefont);
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--paper-dim);
-  flex: none;
-}
-.plate-pips { display: flex; gap: 3px; flex: none; align-self: center; }
-.plate-pip {
-  width: 7px; height: 7px;
-  background: var(--amber);
-}
-.plate-it {
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  color: var(--ink);
-  background: var(--amber);
-  padding: 1px 4px;
-  border-radius: 2px;
-  flex: none;
-  align-self: center;
-}
 
 /* ---------- scrubber round decoration ---------- */
 .round-span {
@@ -437,10 +414,6 @@ body.feed-collapsed #feed { display: none; }
 .feed-speak { color: var(--tc, var(--paper)); }
 .feed-round { color: var(--paper-dim); font-size: 11px; letter-spacing: 0.04em; }
 .feed-pick { color: var(--paper-dim); }
-.plate-pip.hollow {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--amber);
-}
 
 /* ============================================================
    LEDGER additions to the inherited cogame-babel chrome.
@@ -465,40 +438,68 @@ body.feed-collapsed #feed { display: none; }
 .seat6 { --tc: var(--teal); }
 .seat7 { --tc: var(--rose); }
 
-/* ---------- scorebug: eight plates, legible at 360 px ---------- */
+/* ---------- scorebug: eight RANKED plates, legible at 360 px ---------- */
+/* The plate row is the leaderboard now: rank, alias, median, and a conduct
+   bar carrying the same share the board's gauge draws. The pip strip, the
+   repeated `median` label and the subgame tag are gone -- at the viewer's own
+   1280 px target they needed ~217 px of a 149 px plate, and the breakpoints
+   that dropped them did not fire until 1180, so `.plate{overflow:hidden}`
+   clipped the difference and the fallback is what shipped. */
 #scorebug {
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 8px;
+  align-items: start;
   font-size: calc(13px * var(--hudscale, 1));
 }
-.plate { gap: 5px; }
-/* The featured-match iframe on softmax.com is about 360 px wide. Without
-   this the alias collapses to a single ellipsis and the board is unreadable
-   in the one place most people will ever see it. */
+.plate {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+.plate-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.plate-rank {
+  flex: none;
+  width: 10px;
+  font-size: calc(10px * var(--hudscale, 1));
+  color: var(--ghost);
+}
 .plate-name {
   flex: 1 1 auto;
-  min-width: 3.2em;
+  min-width: 2.6em;
   font-size: calc(14px * var(--hudscale, 1));
 }
-.plate-score { font-size: calc(17px * var(--hudscale, 1)); }
-.plate-tag {
-  font-family: var(--finefont);
-  font-size: 8px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--tc, var(--paper-dim));
+.plate-score {
   flex: none;
-  align-self: center;
+  font-size: calc(17px * var(--hudscale, 1));
+  white-space: nowrap;
 }
-.plate-pip { border-radius: 50%; }
+.plate-bar {
+  height: 3px;
+  margin-top: 4px;
+  background: rgba(242, 232, 216, 0.12);
+  overflow: hidden;
+}
+.plate-bar i {
+  display: block;
+  height: 3px;
+  background: var(--paper-dim);
+}
+.plate-bar i.good { background: var(--amber); }
+.plate-bar i.fair { background: var(--paper); }
+.plate-bar i.poor { background: var(--ghost); }
 
 @media (max-width: 640px) {
-  /* Two rows of four, and the small labels go: the numbers and the alias are
-     what has to survive. */
+  /* Two rows of four: the alias and the number are what has to survive. */
   #scorebug { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .plate-label,
-  .plate-tag { display: none; }
-  .plate-pips { display: none; }
+  .plate-rank { display: none; }
+  .plate-row { display: block; }
+  .plate-name { font-size: calc(12px * var(--hudscale, 1)); display: block; }
+  .plate-score { font-size: calc(15px * var(--hudscale, 1)); }
 }
 
 /* ---------- transport band: nothing is ever drawn inside it ---------- */
@@ -509,18 +510,31 @@ body.feed-collapsed #feed { display: none; }
 #endscreen { bottom: var(--band, 0px); }
 #loading { bottom: var(--band, 0px); }
 
-/* ---------- gossip rail ---------- */
+/* ---------- gossip rail: a column BESIDE the plaza ---------- */
+/* It used to be absolutely positioned at top:10 right:10 -- inside the board,
+   directly over the upper-right posts. The plaza is an octagon inscribed in
+   the frame, so the two vertical margins beside it are free space; the board
+   lives in one and the findings panel in the other. */
 #gossip-rail {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 14px;
+  left: 12px;
   bottom: auto;
-  width: clamp(120px, 21%, 190px);
-  display: flex;
+  width: clamp(120px, 17%, 190px);
+  display: none;
   flex-direction: column;
   gap: 6px;
   pointer-events: none;
   z-index: 4;
+}
+#gossip-rail.show { display: flex; }
+#gossip-rail::before {
+  content: "the board";
+  font-family: var(--finefont);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ghost);
 }
 .gossip-card {
   background: rgba(242, 232, 216, 0.92);
@@ -547,33 +561,81 @@ body.feed-collapsed #feed { display: none; }
   overflow: hidden;
 }
 @keyframes gossipflutter {
-  from { opacity: 0; transform: translateX(10px) rotate(1.5deg); }
+  from { opacity: 0; transform: translateX(-10px) rotate(-1.5deg); }
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .gossip-card { animation: none; }
 }
-@media (max-width: 480px) {
-  /* Collapse the rail so the four tables stay readable. */
-  #gossip-rail { display: none; }
-}
 
-/* ---------- ring caption ---------- */
+/* ---------- findings: the gauge legend and every flagged pair ---------- */
 #ringnote {
   position: absolute;
-  left: 12px;
-  bottom: 10px;
+  top: 14px;
+  right: 12px;
+  left: auto;
+  bottom: auto;
+  width: clamp(120px, 17%, 190px);
   display: none;
-  max-width: 60%;
+  max-width: none;
+  font-family: var(--finefont);
+  pointer-events: none;
+  z-index: 4;
+}
+#ringnote.show { display: block; }
+.find-legend {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ghost);
+  line-height: 1.5;
+  text-align: right;
+}
+.find-title {
+  font-family: var(--pixfont);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--red);
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(224, 82, 58, 0.4);
+}
+.find-row {
+  font-family: var(--pixfont);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--paper-dim);
+  margin-top: 4px;
+}
+.find-row .red { color: var(--red); }
+.find-row .blue { color: var(--blue); }
+.find-row .green { color: var(--green); }
+.find-row .yellow { color: var(--yellow); }
+.find-row .violet { color: var(--violet); }
+.find-row .orange { color: var(--orange); }
+.find-row .teal { color: var(--teal); }
+.find-row .rose { color: var(--rose); }
+.find-delta { color: var(--red); margin-left: 6px; }
+.find-ring {
   font-family: var(--pixfont);
   font-size: 11px;
   letter-spacing: 0.1em;
   color: var(--red);
-  text-shadow: 0 2px 0 var(--ink);
-  pointer-events: none;
-  z-index: 5;
+  margin-top: 6px;
 }
-#ringnote.show { display: block; }
+.find-note {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  color: var(--ghost);
+  margin-top: 6px;
+}
+@media (max-width: 640px) {
+  /* Below the featured-match width both columns would eat the plaza. */
+  #gossip-rail, #ringnote { display: none; }
+  #ringnote.show { display: none; }
+}
 
 /* ---------- scrubber beats: labelled, clickable buttons ---------- */
 /* Every beat is a real <button> with an aria-label, so the transport is
@@ -640,10 +702,6 @@ button.beat-marker:focus-visible {
 .feed-gossip { color: var(--paper); font-style: italic; }
 .feed-ring { color: var(--red); font-weight: 600; }
 .feed-start { color: var(--paper-dim); }
-.plate-pip.hollow {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--amber);
-}
 
 /* ---------- endcard: the ring findings, reported and never scored ---------- */
 .end-rows { grid-template-columns: auto 1fr auto auto auto auto auto; }
@@ -658,24 +716,3 @@ button.beat-marker:focus-visible {
   text-align: center;
 }
 .end-rings div { margin-top: 3px; }
-
-/* ---------- scorebug fit: eight plates in one band ---------- */
-/* Eight plates across is a lot of plate. Nothing may bleed into its
-   neighbour, so the plate clips, the alias is the only part that flexes, and
-   the decorations drop out in order of how little they carry: the subgame
-   tag first, then the `median` label, then the pip strip. */
-.plate {
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-.plate-score { white-space: nowrap; }
-.plate-pips { max-width: 5em; overflow: hidden; }
-.plate-tag {
-  max-width: 5.2em;
-  overflow: hidden;
-  text-overflow: clip;
-  white-space: nowrap;
-}
-@media (max-width: 1440px) { .plate-tag { display: none; } }
-@media (max-width: 1180px) { .plate-pips { display: none; } }
-@media (max-width: 980px) { .plate-label { display: none; } }
