@@ -3,7 +3,7 @@
 ## Endpoints:
 ##   GET /healthz                    - liveness
 ##   GET /client/global              - spectator page
-##   GET /client/player              - player page (view-only; policies are prompts)
+##   GET /client/player              - player page (view-only)
 ##   GET /client/replay              - replay page (replay mode)
 ##   GET /client/renderer.js         - shared stage renderer
 ##   GET /client/chrome.css          - shared chrome stylesheet
@@ -19,7 +19,7 @@
 ##                   seat may not see the round's pairings or moves)
 ##                   {"type":"final","scores":[...],...}
 ##   player -> game: {"type":"prompt","prompt":"...",
-##                    "scripted":"mirror"|"shark"|""}
+##                    "scripted":"mirror"|"shark"|"","jev":false}
 ##                   (prompt max 4000 characters, cut on a rune boundary)
 
 import
@@ -59,6 +59,7 @@ type
     config: GameConfig
     sim: Sim
     prompts: seq[string]
+    jev: seq[bool]
     scripted: seq[ScriptKind]
     playerSockets: Table[int, WebSocket]
     socketSlots: Table[WebSocket, int]
@@ -301,11 +302,16 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       ## Step 10 of the resolution order, applied before every round: a round
       ## is only started when the whole reserve still fits inside the play
       ## budget, so play always stops with the artifact window intact.
-      let reserve =
-        if client.disabled: ScriptedReserveSeconds else: RoundReserveSeconds
       withLock stateLock:
         if state.sim.done:
           break
+        var modelSeats = not client.disabled
+        if client.canUseJev:
+          for seat in seats:
+            if state.jev[seat] and state.scripted[seat] == skNone:
+              modelSeats = true
+        let reserve =
+          if modelSeats: RoundReserveSeconds else: ScriptedReserveSeconds
         if playDeadline > 0.0 and epochTime() + reserve > playDeadline:
           echo "ledger: episode deadline reached after ",
             state.sim.roundsPlayed, "/", config.rounds,
@@ -322,24 +328,26 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       let roundStart = epochTime()
       var simCopy: Sim
       var promptsCopy: seq[string]
+      var jevCopy: seq[bool]
       var scriptedCopy: seq[ScriptKind]
       withLock stateLock:
         simCopy = state.sim
         promptsCopy = state.prompts
+        jevCopy = state.jev
         scriptedCopy = state.scripted
 
       var llmSeats = 0
-      if not client.disabled:
-        for seat in seats:
-          if scriptedCopy[seat] == skNone:
-            inc llmSeats
+      for seat in seats:
+        if scriptedCopy[seat] == skNone and
+            (not client.disabled or jevCopy[seat] and client.canUseJev):
+          inc llmSeats
 
       ## Steps 2-3: ONE parallel batch of eight calls, then a single retry
       ## sub-batch, then the scripted fallback. The slow part runs outside
       ## the lock on a snapshot; only this thread mutates the sim, so the
       ## snapshot cannot go stale.
       let decisions = client.decideAll(simCopy, seats, promptsCopy,
-        scriptedCopy)
+        scriptedCopy, jevCopy)
 
       withLock stateLock:
         var moves: array[Meetings, array[2, int]]
@@ -516,6 +524,7 @@ proc websocketHandler(
           let kind = parseScriptKind(payload{"scripted"}.getStr())
           withLock stateLock:
             state.prompts[slot] = prompt
+            state.jev[slot] = payload{"jev"}.getBool()
             state.scripted[slot] = kind
           echo "ledger: slot ", slot, " delivered a prompt (", prompt.len,
             " chars", (if kind != skNone: ", scripted " & $kind else: ""), ")"
@@ -586,6 +595,7 @@ proc runGameServer*(config: GameConfig, runtimeConfig: RuntimeConfig) =
   state.config = config
   state.sim = initSim(config)
   state.prompts = newSeq[string](config.players.len)
+  state.jev = newSeq[bool](config.players.len)
   state.scripted = newSeq[ScriptKind](config.players.len)
   runtimeConfigGlobal = runtimeConfig
 

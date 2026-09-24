@@ -205,6 +205,8 @@ suite "llm plumbing, offline":
     putEnv("ANTHROPIC_API_KEY_URI", "")
     putEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "")
     putEnv("AWS_BEARER_TOKEN_BEDROCK", "")
+    putEnv("METTA_CAPTURE_URL", "")
+    putEnv("TYPESAFE_API_KEY", "")
     let config = fixture(3, 6)
     let client = newLlmClient(config)
     check client.disabled
@@ -215,7 +217,8 @@ suite "llm plumbing, offline":
       seats.add(seat)
     let started = getMonoTime()
     let decisions = client.decideAll(sim, seats,
-      newSeq[string](Seats), newSeq[ScriptKind](Seats))
+      newSeq[string](Seats), newSeq[ScriptKind](Seats),
+      newSeq[bool](Seats))
     let elapsed = (getMonoTime() - started).inMilliseconds
     check decisions.len == Seats
     for index, decision in decisions:
@@ -262,6 +265,26 @@ suite "llm plumbing, offline":
       parseJson("""{"move": -20}""")).move == 0
     check parseDecision(sgUltimatum, true,
       parseJson("""{"move": 40}""")).move == Pie
+
+  test "Jev ranks each role's legal move menu":
+    check jevCriteria(sgDilemma, true).len == 2
+    check jevCriteria(sgTrust, true).len == InvestorEndowment + 1
+    check jevCriteria(sgTrust, false).len == 6
+    check jevCriteria(sgUltimatum, true).len == Pie + 1
+    check jevCriteria(sgUltimatum, false).len == Pie + 1
+    let criteria = jevCriteria(sgTrust, false)
+    var probabilities = newJObject()
+    for choice, description in criteria.pairs:
+      discard description
+      probabilities[choice] = %(if choice == "50": 1.0 else: 0.0)
+    let response = %*{"answers": {"decision": {
+      "type": "choice", "choice": "50", "confidence": 0.8,
+      "probabilities": probabilities}}, "model": "test",
+      "usage": {"input_tokens": 10, "output_tokens": 5}}
+    check jevDecision(response, criteria).move == 50
+    probabilities["50"] = %0.5
+    expect LedgerError:
+      discard jevDecision(response, criteria)
 
   test "prose around the object still yields the object":
     let payload = extractJsonObject(

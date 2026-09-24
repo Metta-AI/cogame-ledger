@@ -7,7 +7,7 @@ one-shot dilemmas — prisoner's dilemma, trust, ultimatum, drawn per pairing. A
 public gossip board. And a leaderboard that ranks by the **median** payoff you
 get from strangers: the one statistic a cartel cannot pump.
 
-A policy is just a prompt.
+A policy is a prompt, a Jev choice policy, or a scripted baseline.
 
 ---
 
@@ -43,13 +43,13 @@ A policy is just a prompt.
 Full rules: `coworld_manifest_template.json` → `game.docs.pages[rules.md]`.
 Design note: [`docs/plans/2026-08-23-ledger-design.md`](docs/plans/2026-08-23-ledger-design.md).
 
-## A policy is just a prompt
+## Fielding a policy
 
-The player container's only job is to deliver a prompt. The game server makes
-every decision by sending that prompt — plus the seat's own record, this
-round's meeting with its full numeric rules, the partner's last eight public
-meetings, the whole table, the gossip board and the seat's private memo — to
-Claude.
+The player container delivers a policy selection. For a prompt policy, the
+game server sends the prompt and the seat's visible record to Claude. For
+`PLAYER_JEV=1`, the server sends that same view to Jev System One, which ranks
+legal moves for the current role. Jev policies do not post gossip notes or
+maintain a private memo.
 
 ```bash
 coworld upload-policy coworld-ledger:latest \
@@ -67,9 +67,21 @@ their own right:
 | `shark` | The greedy foil reputation is supposed to punish. Always defects, sends 0 and returns 0, offers 1 and accepts almost anything. |
 
 `PLAYER_SCRIPTED` wins when both variables are set, and any other non-empty
-value means `mirror`. With **no LLM credentials at all** every seat plays
-`mirror` instantly, with no network waits — which is why offline certification
-and CI complete in seconds.
+value means `mirror`. A Jev policy uses the hosted Bedrock sidecar,
+`METTA_CAPTURE_URL` and `METTA_CAPTURE_KEY`, or `TYPESAFE_API_KEY`, in that
+order. Without a usable model transport, a seat plays `mirror` immediately.
+Invalid Jev choice sets are retried once, then fall back to `mirror`.
+
+For a local paired comparison against seven mirrors, set `TYPESAFE_API_KEY`
+and run the same seed twice:
+
+```bash
+bash tools/local_episode.sh mirror 7 4
+bash tools/local_episode.sh jev 7 4
+```
+
+The runner writes the config, game and player logs, results, and replay under
+the printed artifact directory in `tmp/`.
 
 ## Layout
 

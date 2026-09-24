@@ -1,9 +1,10 @@
-## Ledger player: a policy is just a prompt.
+## Ledger player: a policy is a prompt, a Jev choice policy, or scripted.
 ##
 ## Connects to the game, delivers its prompt (from PLAYER_PROMPT, or a default
 ## Ledger strategy), then idles until the final frame. All of the actual
 ## decision making happens inside the game server, which sends this seat's
 ## prompt to Claude once per round, in one parallel batch with the other seven.
+## PLAYER_JEV=1 asks the server to rank legal moves with Jev System One.
 ##
 ## PLAYER_SCRIPTED names a built-in baseline instead — `mirror` (reciprocal
 ## with forgiveness) or `shark` (the greedy foil). Any other non-empty value
@@ -48,9 +49,11 @@ when isMainModule:
   if prompt.len == 0:
     prompt = DefaultPrompt
   let scripted = scriptedName()
+  let jev = getEnv("PLAYER_JEV") == "1"
 
   proc promptFrame(): string =
-    $ %*{"type": "prompt", "prompt": prompt, "scripted": scripted}
+    $ %*{"type": "prompt", "prompt": prompt, "scripted": scripted,
+      "jev": jev}
 
   echo "ledger player: connecting to game"
   let socket = newWebSocket(url)
