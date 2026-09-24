@@ -45,11 +45,11 @@ when isMainModule:
   let url = getEnv("COWORLD_PLAYER_WS_URL")
   if url.len == 0:
     quit("COWORLD_PLAYER_WS_URL is not set", 1)
-  var prompt = getEnv("PLAYER_PROMPT")
-  if prompt.len == 0:
-    prompt = DefaultPrompt
   let scripted = scriptedName()
   let jev = getEnv("PLAYER_JEV") == "1"
+  var prompt = getEnv("PLAYER_PROMPT")
+  if prompt.len == 0 and not jev:
+    prompt = DefaultPrompt
 
   proc promptFrame(): string =
     $ %*{"type": "prompt", "prompt": prompt, "scripted": scripted,
