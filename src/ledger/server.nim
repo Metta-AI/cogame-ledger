@@ -148,6 +148,45 @@ proc observationJson*(sim: Sim, slot: int): JsonNode =
   let first = meeting.a == slot
   let partner = if first: meeting.b else: meeting.a
   let (minimum, maximum) = legalMoveRange(meeting.game, first)
+  var publicSeats = newJArray()
+  for seat in 0 ..< Seats:
+    publicSeats.add(%*{
+      "name": sim.names[seat],
+      "median": sim.median(seat),
+      "meetings": sim.meetingCount(seat),
+      "kind": sim.kind[seat],
+      "harsh": sim.harsh[seat]
+    })
+  var currentPairs = newJArray()
+  for pairing in sim.plan.pairs:
+    currentPairs.add(%*{
+      "first": sim.names[pairing.a],
+      "second": sim.names[pairing.b],
+      "game": subGameName(pairing.game)
+    })
+  var publicHistory = newJArray()
+  for record in sim.history:
+    publicHistory.add(%*{
+      "round": record.round,
+      "first": sim.names[record.a],
+      "second": sim.names[record.b],
+      "game": subGameName(record.game),
+      "firstMove": record.moveA,
+      "secondMove": record.moveB,
+      "firstPay": record.payA,
+      "secondPay": record.payB
+    })
+  var gossip = newJArray()
+  let gossipStart = max(0, sim.board.len - GossipWindow)
+  for index in gossipStart ..< sim.board.len:
+    let note = sim.board[index]
+    gossip.add(%*{
+      "round": note.round,
+      "author": sim.names[note.author],
+      "subject": sim.names[note.subject],
+      "text": note.text
+    })
+  let noteTarget = sim.noteTarget(slot)
   %*{
     "name": sim.names[slot],
     "round": sim.round,
@@ -157,7 +196,22 @@ proc observationJson*(sim: Sim, slot: int): JsonNode =
     "role": roleName(meeting.game, first),
     "legal": {"moveMin": minimum, "moveMax": maximum,
       "noteMaxChars": MaxNoteLen, "memoMaxChars": MaxMemoLen},
-    "view": sim.userPrompt(slot, "")
+    "publicSeats": publicSeats,
+    "currentPairs": currentPairs,
+    "publicHistory": publicHistory,
+    "gossip": gossip,
+    "memo": sim.memos[slot],
+    "noteTarget": (if noteTarget >= 0: %sim.names[noteTarget]
+      else: newJNull()),
+    "rules": {
+      "dilemma": {"bothCooperate": PdReward,
+        "bothDefect": PdPunishment, "temptation": PdTemptation,
+        "sucker": PdSucker},
+      "trust": {"investorEndowment": InvestorEndowment,
+        "trusteeEndowment": TrusteeEndowment,
+        "multiplier": TrustMultiplier},
+      "ultimatum": {"pie": Pie}
+    }
   }
 
 proc broadcastLocked(gs: GameState) =

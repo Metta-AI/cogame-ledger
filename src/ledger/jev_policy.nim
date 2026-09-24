@@ -53,7 +53,13 @@ proc chooseMove*(observation: JsonNode): int =
     headers["authorization"] = "Bearer " & key
   let body = %*{
     "model": model,
-    "state": observation["view"].getStr(),
+    "state": "You are " & observation["name"].getStr() &
+      " in Ledger. Your score is the median of your meeting payoffs. " &
+      "All moves are simultaneous; in trust and ultimatum the second " &
+      "mover commits a rule before seeing the first mover's move. " &
+      "Public history, pairings, gossip, numeric game rules, your private " &
+      "memo, and your legal move range are in this observation:\n" &
+      $observation,
     "questions": {"decision": {
       "type": "choice",
       "instructions": "Choose the move that improves your median payoff across meetings while considering your partner's history and your future reputation.",

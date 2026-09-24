@@ -210,8 +210,10 @@ suite "llm plumbing, offline":
     check observation["round"].getInt() == 0
     check observation["legal"]["moveMin"].getInt() == 0
     check observation["legal"]["moveMax"].getInt() <= 100
-    check "seat one private memo" in observation["view"].getStr()
-    check "seat zero private memo" notin observation["view"].getStr()
+    check observation["memo"].getStr() == "seat one private memo"
+    check "seat zero private memo" notin $observation
+    check observation["publicSeats"].len == Seats
+    check observation["currentPairs"].len == Meetings
     check not observation.hasKey("memos")
 
   test "with no credentials every seat is scripted, instantly, over no wire":
