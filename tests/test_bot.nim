@@ -7,8 +7,9 @@
 ## path, tolerant reply parsing with clamping, and the batch-position mapping
 ## a parallel rewrite most easily gets wrong.
 
-import std/[json, monotimes, os, random, sets, times, unicode, unittest]
-import ledger/[llm, sim]
+import std/[json, monotimes, os, random, sets, strutils, times, unicode,
+  unittest]
+import ledger/[llm, server, sim]
 
 proc fixture(seed: int, rounds = 14): GameConfig =
   result = defaultGameConfig()
@@ -200,6 +201,19 @@ suite "mirror reciprocates":
       check sim.halo(seat) < 0.5
 
 suite "llm plumbing, offline":
+  test "external observation reveals only this seat's memo":
+    var sim = initSim(fixture(7, 4))
+    sim.memos[0] = "seat zero private memo"
+    sim.memos[1] = "seat one private memo"
+    sim.beginRound()
+    let observation = observationJson(sim, 1)
+    check observation["round"].getInt() == 0
+    check observation["legal"]["moveMin"].getInt() == 0
+    check observation["legal"]["moveMax"].getInt() <= 100
+    check "seat one private memo" in observation["view"].getStr()
+    check "seat zero private memo" notin observation["view"].getStr()
+    check not observation.hasKey("memos")
+
   test "with no credentials every seat is scripted, instantly, over no wire":
     putEnv("ANTHROPIC_API_KEY", "")
     putEnv("ANTHROPIC_API_KEY_URI", "")
@@ -217,8 +231,7 @@ suite "llm plumbing, offline":
       seats.add(seat)
     let started = getMonoTime()
     let decisions = client.decideAll(sim, seats,
-      newSeq[string](Seats), newSeq[ScriptKind](Seats),
-      newSeq[bool](Seats))
+      newSeq[string](Seats), newSeq[ScriptKind](Seats))
     let elapsed = (getMonoTime() - started).inMilliseconds
     check decisions.len == Seats
     for index, decision in decisions:
@@ -265,26 +278,6 @@ suite "llm plumbing, offline":
       parseJson("""{"move": -20}""")).move == 0
     check parseDecision(sgUltimatum, true,
       parseJson("""{"move": 40}""")).move == Pie
-
-  test "Jev ranks each role's legal move menu":
-    check jevCriteria(sgDilemma, true).len == 2
-    check jevCriteria(sgTrust, true).len == InvestorEndowment + 1
-    check jevCriteria(sgTrust, false).len == 6
-    check jevCriteria(sgUltimatum, true).len == Pie + 1
-    check jevCriteria(sgUltimatum, false).len == Pie + 1
-    let criteria = jevCriteria(sgTrust, false)
-    var probabilities = newJObject()
-    for choice, description in criteria.pairs:
-      discard description
-      probabilities[choice] = %(if choice == "50": 1.0 else: 0.0)
-    let response = %*{"answers": {"decision": {
-      "type": "choice", "choice": "50", "confidence": 0.8,
-      "probabilities": probabilities}}, "model": "test",
-      "usage": {"input_tokens": 10, "output_tokens": 5}}
-    check jevDecision(response, criteria).move == 50
-    probabilities["50"] = %0.5
-    expect LedgerError:
-      discard jevDecision(response, criteria)
 
   test "prose around the object still yields the object":
     let payload = extractJsonObject(

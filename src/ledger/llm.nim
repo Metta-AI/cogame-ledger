@@ -1,6 +1,8 @@
-## Server-side decisions for Ledger. Prompt policies ask Claude using the
-## seat's record, current meeting, partner history, public gossip, private
-## memo, and operator prompt. Jev policies rank legal moves from that view.
+## Claude-backed decision making for Ledger. Each seat's policy is just a
+## prompt: the game server composes the seat's view (its own record, this
+## round's meeting with its full numeric rules, the partner's public history,
+## the table, the gossip board, its private memo) plus that seat's prompt and
+## asks Claude what it does.
 ##
 ## All eight seats decide simultaneously by rule — trust and ultimatum use the
 ## experimental-economics STRATEGY METHOD, so the second mover commits a
@@ -13,7 +15,7 @@
 ##   Bedrock sidecar / bearer token   - hosted pods
 ##   ANTHROPIC_API_KEY                - the key itself
 ##   ANTHROPIC_API_KEY_URI            - a URI holding the key
-## With no usable model transport a seat falls back to the scripted
+## With no credentials every decision falls back to the always-legal scripted
 ## baseline immediately (no retries, no network waits) so offline
 ## certification still completes - this fallback is load-bearing. The same
 ## scripted bots are also fieldable policies: a player that registers as
@@ -58,13 +60,6 @@ type
     timeoutSeconds: int
     disabled*: bool   ## true once credentials are known-unavailable
     throttled*: bool  ## true once a 429 has been seen; the server slows down
-    jevEndpoint: string
-    jevKey: string
-    jevModel: string
-    jevTrajectoryId: string
-
-proc canUseJev*(client: LlmClient): bool =
-  client.jevEndpoint.len > 0
 
 proc parseScriptKind*(text: string): ScriptKind =
   ## PLAYER_SCRIPTED values: "shark" plays the greedy foil, "" plays no
@@ -129,23 +124,6 @@ proc newLlmClient*(config: GameConfig): LlmClient =
   )
   let bedrockEndpoint = getEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME").strip()
   let bedrockToken = getEnv("AWS_BEARER_TOKEN_BEDROCK").strip()
-  let captureUrl = getEnv("METTA_CAPTURE_URL").strip()
-  let typesafeKey = getEnv("TYPESAFE_API_KEY").strip()
-  if bedrockEndpoint.len > 0:
-    result.jevEndpoint = bedrockEndpoint.strip(chars = {'/'}, leading = false)
-    result.jevModel = "typesafe/jev-1.13"
-  elif captureUrl.len > 0:
-    result.jevEndpoint = captureUrl.strip(chars = {'/'}, leading = false)
-    result.jevKey = getEnv("METTA_CAPTURE_KEY").strip()
-    if result.jevKey.len == 0:
-      raise newException(LedgerError, "METTA_CAPTURE_KEY is required")
-    result.jevModel = "typesafe/jev-1.13"
-    result.jevTrajectoryId = "ledger-jev-" & $config.seed
-  elif typesafeKey.len > 0:
-    result.jevEndpoint = getEnv("TYPESAFE_BASE_URL",
-      "https://api.typesafe.ai").strip(chars = {'/'}, leading = false)
-    result.jevKey = typesafeKey
-    result.jevModel = getEnv("TYPESAFE_DEFAULT_MODEL", "jev-latest")
   if bedrockEndpoint.len > 0 or bedrockToken.len > 0:
     let region = getEnv("AWS_REGION",
       getEnv("AWS_DEFAULT_REGION", "us-west-2"))
@@ -167,9 +145,7 @@ proc newLlmClient*(config: GameConfig): LlmClient =
   else:
     result.transport = ltNone
     result.disabled = true
-    if result.canUseJev:
-      result.curl = newCurly()
-    echo "ledger llm: no Claude credentials; prompt seats use scripted fallback"
+    echo "ledger llm: no LLM credentials; using scripted fallback"
 
 # ---- Scripted baselines -----------------------------------------------------
 
@@ -636,57 +612,6 @@ proc parseDecision*(game: SubGame, first: bool, payload: JsonNode): Decision =
       subGameName(game), " ", roleName(game, first), "; clamped to ",
       result.move
 
-proc jevCriteria*(game: SubGame, first: bool): JsonNode =
-  result = newJObject()
-  case game
-  of sgDilemma:
-    result["0"] = %"Cooperate with your partner"
-    result["1"] = %"Defect against your partner"
-  of sgTrust:
-    if first:
-      for sent in 0 .. InvestorEndowment:
-        result[$sent] = %("Send " & $sent & " coins to the trustee")
-    else:
-      for percent in [0, 10, 25, 50, 75, 100]:
-        result[$percent] = %("Return " & $percent &
-          "% of the multiplied investment to the investor")
-  of sgUltimatum:
-    for amount in 0 .. Pie:
-      result[$amount] = %(
-        if first: "Offer " & $amount & " coins to the responder"
-        else: "Accept offers of at least " & $amount & " coins")
-
-proc jevDecision*(payload, criteria: JsonNode): Decision =
-  let answer = payload["answers"]["decision"]
-  let probabilities = answer["probabilities"]
-  let reported = answer["choice"].getStr()
-  if answer["type"].getStr() != "choice" or
-      not criteria.hasKey(reported) or probabilities.len != criteria.len:
-    raise newException(LedgerError, "Jev returned the wrong choice set")
-  let confidence = answer["confidence"].getFloat()
-  if confidence < 0 or confidence > 1:
-    raise newException(LedgerError, "Jev confidence is outside [0, 1]")
-  var total = 0.0
-  var best = -1.0
-  var choice = ""
-  for name, probability in probabilities.pairs:
-    if not criteria.hasKey(name):
-      raise newException(LedgerError, "Jev returned an unknown choice")
-    let value = probability.getFloat()
-    if value < 0 or value > 1:
-      raise newException(LedgerError, "Jev probability is outside [0, 1]")
-    total += value
-    if value > best:
-      best = value
-      choice = name
-  if abs(total - 1) > probabilities.len.float * 0.005 + 1e-6:
-    raise newException(LedgerError, "Jev probabilities do not sum to one")
-  result.move = parseInt(choice)
-  echo "ledger jev: move ", choice, " reported ", reported,
-    " confidence ", confidence, " model ", payload{"model"}.getStr(),
-    " input_tokens ", payload["usage"]{"input_tokens"}.getInt(),
-    " output_tokens ", payload["usage"]{"output_tokens"}.getInt()
-
 # ---- The batched decision path ----------------------------------------------
 
 proc seatForBatchPosition*(seats, open: seq[int], position: int): int =
@@ -703,8 +628,7 @@ proc decideAll*(
   sim: Sim,
   seats: seq[int],
   prompts: seq[string],
-  scripted: seq[ScriptKind],
-  jev: seq[bool]
+  scripted: seq[ScriptKind]
 ): seq[Decision] =
   ## One decision per seat in `seats`, in order, from ONE parallel batch of
   ## HTTP requests. Never raises: any failure falls back to the scripted
@@ -714,22 +638,13 @@ proc decideAll*(
   var open: seq[int]     ## indexes into `seats` still undecided
   for index, seat in seats:
     let kind = scripted[seat]
-    if kind != skNone or (client.disabled and not jev[seat]) or
-        (jev[seat] and not client.canUseJev):
+    if kind != skNone or client.disabled:
       result[index] = scriptedAction(sim, seat,
         (if kind == skNone: skMirror else: kind))
     else:
       open.add(index)
   for attempt in 0 .. 1:
-    if client.disabled:
-      var enabled: seq[int]
-      for index in open:
-        if jev[seats[index]]:
-          enabled.add(index)
-        else:
-          result[index] = scriptedAction(sim, seats[index], skMirror)
-      open = enabled
-    if open.len == 0:
+    if open.len == 0 or client.disabled:
       break
     var batch: RequestBatch
     for index in open:
@@ -737,36 +652,13 @@ proc decideAll*(
       let pair = sim.pairIndexOf(sim.round, seat)
       let meeting = sim.plan.pairs[pair]
       let first = meeting.a == seat
-      if jev[seat]:
-        var headers: HttpHeaders
-        headers["content-type"] = "application/json"
-        if client.jevKey.len > 0:
-          headers["authorization"] = "Bearer " & client.jevKey
-        else:
-          headers["x-coworld-player-slot"] = $seat
-        if client.jevTrajectoryId.len > 0:
-          headers["x-metta-trajectory-id"] =
-            client.jevTrajectoryId & "-" & $seat
-        let body = %*{
-          "model": client.jevModel,
-          "state": sim.systemPrompt(seat) & "\n\n" &
-            sim.userPrompt(seat, prompts[seat]),
-          "questions": {"decision": {
-            "type": "choice",
-            "instructions": "Choose the move that maximizes your median payoff while accounting for this partner's history and how your conduct affects future partners.",
-            "criteria": jevCriteria(meeting.game, first)
-          }}
-        }
-        batch.post(client.jevEndpoint & "/v1/systemone", headers, $body,
-          $index)
-      else:
-        var user = sim.userPrompt(seat, prompts[seat])
-        if attempt > 0:
-          user.add("\nYour previous reply was invalid. Respond with ONLY the " &
-            "requested JSON object, with \"move\" " &
-            legalForm(meeting.game, first) & ".")
-        let request = client.requestFor(systemPrompt(sim, seat), user)
-        batch.post(request.url, request.headers, request.body, $index)
+      var user = sim.userPrompt(seat, prompts[seat])
+      if attempt > 0:
+        user.add("\nYour previous reply was invalid. Respond with ONLY the " &
+          "requested JSON object, with \"move\" " &
+          legalForm(meeting.game, first) & ".")
+      let request = client.requestFor(systemPrompt(sim, seat), user)
+      batch.post(request.url, request.headers, request.body, $index)
     let responses = client.curl.makeRequests(batch, client.timeoutSeconds)
     var stillOpen: seq[int]
     for position, index in open:
@@ -777,19 +669,10 @@ proc decideAll*(
       try:
         ## `responses` is indexed by BATCH POSITION, which is the order the
         ## requests were queued in — never the order they came back in.
-        if jev[seat]:
-          let response = responses[position].response
-          let error = responses[position].error
-          if error.len > 0 or response.code < 200 or response.code >= 300:
-            raise newException(LedgerError, "Jev transport failed: " &
-              error & " HTTP " & $response.code)
-          result[index] = jevDecision(parseJson(response.body),
-            jevCriteria(meeting.game, first))
-        else:
-          let text = client.textOf(responses[position].response,
-            responses[position].error, batch[position].url)
-          result[index] = parseDecision(meeting.game, first,
-            extractJsonObject(text))
+        let text = client.textOf(responses[position].response,
+          responses[position].error, batch[position].url)
+        result[index] = parseDecision(meeting.game, first,
+          extractJsonObject(text))
       except CatchableError as error:
         echo "ledger llm: seat ", seat, " attempt ", attempt, " failed: ",
           cleanText(error.msg, 300)
