@@ -3,24 +3,25 @@
 ## Endpoints:
 ##   GET /healthz                    - liveness
 ##   GET /client/global              - spectator page
-##   GET /client/player              - player page (view-only; policies are prompts)
+##   GET /client/player              - player page (view-only)
 ##   GET /client/replay              - replay page (replay mode)
 ##   GET /client/renderer.js         - shared stage renderer
 ##   GET /client/chrome.css          - shared chrome stylesheet
 ##   GET /client/assets/<name>       - sprites and fonts
-##   WS  /player?slot=N&token=T      - player protocol (prompt delivery)
+##   WS  /player?slot=N&token=T      - player observation/action protocol
 ##   WS  /global                     - spectator snapshots
 ##   WS  /replay                     - replay payload (replay mode)
 ##
-## Player protocol (ledger.player.v1), all JSON text frames:
+## Player protocol (ledger.player.v2), all JSON text frames:
 ##   game -> player: {"type":"welcome","slot":N,"name":"<alias>","rounds":N}
 ##                   {"type":"state",...} after every round (redacted to the
 ##                   seat's own tallies: all decisions are simultaneous, so a
 ##                   seat may not see the round's pairings or moves)
 ##                   {"type":"final","scores":[...],...}
-##   player -> game: {"type":"prompt","prompt":"...",
-##                    "scripted":"mirror"|"shark"|""}
-##                   (prompt max 4000 characters, cut on a rune boundary)
+##                   {"type":"observation","round":N,"observation":{...}}
+##   player -> game: {"type":"register","control":"external"}
+##                   {"type":"action","round":N,"action":{"move":N,...}}
+##   Existing prompt registrations remain valid for published policies.
 
 import
   std/[json, locks, os, sets, strutils, tables, times, unicode],
@@ -59,6 +60,9 @@ type
     config: GameConfig
     sim: Sim
     prompts: seq[string]
+    external: seq[bool]
+    awaiting: seq[bool]
+    actions: seq[JsonNode]
     scripted: seq[ScriptKind]
     playerSockets: Table[int, WebSocket]
     socketSlots: Table[WebSocket, int]
@@ -116,8 +120,7 @@ proc playerStateJson(gs: GameState, slot: int): JsonNode =
   ## Every decision in Ledger is simultaneous, so a seat may not see this
   ## round's pairings, the moves, or any other seat's memo. It sees only its
   ## own tallies and the round counter. Decisions are server-side, so nothing
-  ## is lost: the seat's real view is the observation the server composes for
-  ## its call.
+  ## is lost: the decision observation supplies the current pairing privately.
   %*{
     "type": "state",
     "slot": slot,
@@ -136,6 +139,79 @@ proc playerStateJson(gs: GameState, slot: int): JsonNode =
     "started": gs.started,
     "done": gs.sim.done,
     "reason": gs.sim.reason
+  }
+
+proc observationJson*(sim: Sim, slot: int): JsonNode =
+  ## This seat's current view, independent of the policy implementation.
+  let pair = sim.pairIndexOf(sim.round, slot)
+  let meeting = sim.plan.pairs[pair]
+  let first = meeting.a == slot
+  let partner = if first: meeting.b else: meeting.a
+  let (minimum, maximum) = legalMoveRange(meeting.game, first)
+  var publicSeats = newJArray()
+  for seat in 0 ..< Seats:
+    publicSeats.add(%*{
+      "name": sim.names[seat],
+      "median": sim.median(seat),
+      "meetings": sim.meetingCount(seat),
+      "kind": sim.kind[seat],
+      "harsh": sim.harsh[seat]
+    })
+  var currentPairs = newJArray()
+  for pairing in sim.plan.pairs:
+    currentPairs.add(%*{
+      "first": sim.names[pairing.a],
+      "second": sim.names[pairing.b],
+      "game": subGameName(pairing.game)
+    })
+  var publicHistory = newJArray()
+  for record in sim.history:
+    publicHistory.add(%*{
+      "round": record.round,
+      "first": sim.names[record.a],
+      "second": sim.names[record.b],
+      "game": subGameName(record.game),
+      "firstMove": record.moveA,
+      "secondMove": record.moveB,
+      "firstPay": record.payA,
+      "secondPay": record.payB
+    })
+  var gossip = newJArray()
+  let gossipStart = max(0, sim.board.len - GossipWindow)
+  for index in gossipStart ..< sim.board.len:
+    let note = sim.board[index]
+    gossip.add(%*{
+      "round": note.round,
+      "author": sim.names[note.author],
+      "subject": sim.names[note.subject],
+      "text": note.text
+    })
+  let noteTarget = sim.noteTarget(slot)
+  %*{
+    "name": sim.names[slot],
+    "round": sim.round,
+    "rounds": sim.config.rounds,
+    "partner": sim.names[partner],
+    "game": subGameName(meeting.game),
+    "role": roleName(meeting.game, first),
+    "legal": {"moveMin": minimum, "moveMax": maximum,
+      "noteMaxChars": MaxNoteLen, "memoMaxChars": MaxMemoLen},
+    "publicSeats": publicSeats,
+    "currentPairs": currentPairs,
+    "publicHistory": publicHistory,
+    "gossip": gossip,
+    "memo": sim.memos[slot],
+    "noteTarget": (if noteTarget >= 0: %sim.names[noteTarget]
+      else: newJNull()),
+    "rules": {
+      "dilemma": {"bothCooperate": PdReward,
+        "bothDefect": PdPunishment, "temptation": PdTemptation,
+        "sucker": PdSucker},
+      "trust": {"investorEndowment": InvestorEndowment,
+        "trusteeEndowment": TrusteeEndowment,
+        "multiplier": TrustMultiplier},
+      "ultimatum": {"pie": Pie}
+    }
   }
 
 proc broadcastLocked(gs: GameState) =
@@ -301,11 +377,15 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       ## Step 10 of the resolution order, applied before every round: a round
       ## is only started when the whole reserve still fits inside the play
       ## budget, so play always stops with the artifact window intact.
-      let reserve =
-        if client.disabled: ScriptedReserveSeconds else: RoundReserveSeconds
       withLock stateLock:
         if state.sim.done:
           break
+        var modelSeats = not client.disabled
+        for seat in seats:
+          if state.external[seat]:
+            modelSeats = true
+        let reserve =
+          if modelSeats: RoundReserveSeconds else: ScriptedReserveSeconds
         if playDeadline > 0.0 and epochTime() + reserve > playDeadline:
           echo "ledger: episode deadline reached after ",
             state.sim.roundsPlayed, "/", config.rounds,
@@ -322,24 +402,66 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       let roundStart = epochTime()
       var simCopy: Sim
       var promptsCopy: seq[string]
+      var externalCopy: seq[bool]
       var scriptedCopy: seq[ScriptKind]
       withLock stateLock:
         simCopy = state.sim
         promptsCopy = state.prompts
+        externalCopy = state.external
         scriptedCopy = state.scripted
 
       var llmSeats = 0
-      if not client.disabled:
+      for seat in seats:
+        if externalCopy[seat] or
+            scriptedCopy[seat] == skNone and not client.disabled:
+          inc llmSeats
+
+      withLock stateLock:
         for seat in seats:
-          if scriptedCopy[seat] == skNone:
-            inc llmSeats
+          if externalCopy[seat]:
+            state.awaiting[seat] = true
+            state.actions[seat] = nil
+            if state.playerSockets.hasKey(seat):
+              state.playerSockets[seat].send($ %*{
+                "type": "observation",
+                "round": simCopy.round,
+                "observation": observationJson(simCopy, seat)
+              })
+
+      for seat in seats:
+        if externalCopy[seat]:
+          scriptedCopy[seat] = skMirror
 
       ## Steps 2-3: ONE parallel batch of eight calls, then a single retry
       ## sub-batch, then the scripted fallback. The slow part runs outside
       ## the lock on a snapshot; only this thread mutates the sim, so the
       ## snapshot cannot go stale.
-      let decisions = client.decideAll(simCopy, seats, promptsCopy,
+      var decisions = client.decideAll(simCopy, seats, promptsCopy,
         scriptedCopy)
+
+      let actionDeadline = epochTime() + config.llmTimeoutSeconds.float
+      while epochTime() < actionDeadline:
+        var waiting = false
+        withLock stateLock:
+          for seat in seats:
+            if externalCopy[seat] and state.actions[seat].isNil:
+              waiting = true
+        if not waiting:
+          break
+        sleep(20)
+
+      withLock stateLock:
+        for seat in seats:
+          if externalCopy[seat]:
+            state.awaiting[seat] = false
+            if not state.actions[seat].isNil:
+              let pair = state.sim.pairIndexOf(state.sim.round, seat)
+              let meeting = state.sim.plan.pairs[pair]
+              decisions[seat] = parseDecision(meeting.game,
+                meeting.a == seat, state.actions[seat])
+            else:
+              echo "ledger: seat ", seat,
+                " missed action deadline; using mirror fallback"
 
       withLock stateLock:
         var moves: array[Meetings, array[2, int]]
@@ -462,7 +584,7 @@ proc playerUpgradeHandler(request: Request) {.gcsafe.} =
         state.playerSockets.len, "/", state.config.tokens.len, ")"
       websocket.send($ %*{
         "type": "welcome",
-        "protocol": "ledger.player.v1",
+        "protocol": "ledger.player.v2",
         "slot": slot,
         "name": state.sim.names[slot],
         "rounds": state.config.rounds
@@ -506,7 +628,22 @@ proc websocketHandler(
         return
       try:
         let payload = parseJson(message.data)
-        if payload{"type"}.getStr() == "prompt":
+        if payload{"type"}.getStr() == "register":
+          if payload["control"].getStr() != "external":
+            raise newException(LedgerError, "unknown player control")
+          withLock stateLock:
+            state.external[slot] = true
+          echo "ledger: slot ", slot, " registered external action control"
+        elif payload{"type"}.getStr() == "action":
+          withLock stateLock:
+            if state.external[slot] and state.awaiting[slot] and
+                payload["round"].getInt() == state.sim.round:
+              let pair = state.sim.pairIndexOf(state.sim.round, slot)
+              let meeting = state.sim.plan.pairs[pair]
+              let action = payload["action"]
+              discard parseDecision(meeting.game, meeting.a == slot, action)
+              state.actions[slot] = action
+        elif payload{"type"}.getStr() == "prompt":
           var prompt = payload{"prompt"}.getStr()
           ## Rune-safe: a byte slice here would cut a multi-byte character in
           ## half and the prompt would travel into the model call — and into
@@ -586,6 +723,9 @@ proc runGameServer*(config: GameConfig, runtimeConfig: RuntimeConfig) =
   state.config = config
   state.sim = initSim(config)
   state.prompts = newSeq[string](config.players.len)
+  state.external = newSeq[bool](config.players.len)
+  state.awaiting = newSeq[bool](config.players.len)
+  state.actions = newSeq[JsonNode](config.players.len)
   state.scripted = newSeq[ScriptKind](config.players.len)
   runtimeConfigGlobal = runtimeConfig
 

@@ -7,8 +7,9 @@
 ## path, tolerant reply parsing with clamping, and the batch-position mapping
 ## a parallel rewrite most easily gets wrong.
 
-import std/[json, monotimes, os, random, sets, times, unicode, unittest]
-import ledger/[llm, sim]
+import std/[json, monotimes, os, random, sets, strutils, times, unicode,
+  unittest]
+import ledger/[llm, server, sim]
 
 proc fixture(seed: int, rounds = 14): GameConfig =
   result = defaultGameConfig()
@@ -200,11 +201,28 @@ suite "mirror reciprocates":
       check sim.halo(seat) < 0.5
 
 suite "llm plumbing, offline":
+  test "external observation reveals only this seat's memo":
+    var sim = initSim(fixture(7, 4))
+    sim.memos[0] = "seat zero private memo"
+    sim.memos[1] = "seat one private memo"
+    sim.beginRound()
+    let observation = observationJson(sim, 1)
+    check observation["round"].getInt() == 0
+    check observation["legal"]["moveMin"].getInt() == 0
+    check observation["legal"]["moveMax"].getInt() <= 100
+    check observation["memo"].getStr() == "seat one private memo"
+    check "seat zero private memo" notin $observation
+    check observation["publicSeats"].len == Seats
+    check observation["currentPairs"].len == Meetings
+    check not observation.hasKey("memos")
+
   test "with no credentials every seat is scripted, instantly, over no wire":
     putEnv("ANTHROPIC_API_KEY", "")
     putEnv("ANTHROPIC_API_KEY_URI", "")
     putEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "")
     putEnv("AWS_BEARER_TOKEN_BEDROCK", "")
+    putEnv("METTA_CAPTURE_URL", "")
+    putEnv("TYPESAFE_API_KEY", "")
     let config = fixture(3, 6)
     let client = newLlmClient(config)
     check client.disabled

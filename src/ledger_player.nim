@@ -1,9 +1,10 @@
-## Ledger player: a policy is just a prompt.
+## Ledger player: Jev chooses actions from seat observations.
 ##
 ## Connects to the game, delivers its prompt (from PLAYER_PROMPT, or a default
 ## Ledger strategy), then idles until the final frame. All of the actual
 ## decision making happens inside the game server, which sends this seat's
 ## prompt to Claude once per round, in one parallel batch with the other seven.
+## PLAYER_JEV=1 runs Jev in this player container.
 ##
 ## PLAYER_SCRIPTED names a built-in baseline instead — `mirror` (reciprocal
 ## with forgiveness) or `shark` (the greedy foil). Any other non-empty value
@@ -15,6 +16,7 @@
 
 import
   std/[json, options, os, strutils],
+  ledger/jev_policy,
   whisky
 
 const DefaultPrompt = """
@@ -44,13 +46,17 @@ when isMainModule:
   let url = getEnv("COWORLD_PLAYER_WS_URL")
   if url.len == 0:
     quit("COWORLD_PLAYER_WS_URL is not set", 1)
-  var prompt = getEnv("PLAYER_PROMPT")
-  if prompt.len == 0:
-    prompt = DefaultPrompt
   let scripted = scriptedName()
+  let jev = getEnv("PLAYER_JEV") == "1"
+  var prompt = getEnv("PLAYER_PROMPT")
+  if prompt.len == 0 and not jev:
+    prompt = DefaultPrompt
 
   proc promptFrame(): string =
-    $ %*{"type": "prompt", "prompt": prompt, "scripted": scripted}
+    if jev:
+      $ %*{"type": "register", "control": "external"}
+    else:
+      $ %*{"type": "prompt", "prompt": prompt, "scripted": scripted}
 
   echo "ledger player: connecting to game"
   let socket = newWebSocket(url)
@@ -72,8 +78,13 @@ when isMainModule:
       let message = received.get()
       if message.kind != TextMessage:
         continue
+      let payload = parseJson(message.data)
+      if jev and payload{"type"}.getStr() == "observation":
+        let move = chooseMove(payload["observation"])
+        socket.send($ %*{"type": "action", "round": payload["round"],
+          "action": {"move": move, "note": "", "memo": ""}})
+        continue
       try:
-        let payload = parseJson(message.data)
         case payload{"type"}.getStr()
         of "welcome":
           echo "ledger player: seated at slot ", payload{"slot"}.getInt(),

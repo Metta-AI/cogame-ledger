@@ -7,7 +7,7 @@ one-shot dilemmas — prisoner's dilemma, trust, ultimatum, drawn per pairing. A
 public gossip board. And a leaderboard that ranks by the **median** payoff you
 get from strangers: the one statistic a cartel cannot pump.
 
-A policy is just a prompt.
+A policy is a prompt, a Jev choice policy, or a scripted baseline.
 
 ---
 
@@ -28,7 +28,8 @@ A policy is just a prompt.
   games, so Ledger resolves them with the experimental-economics **strategy
   method**: the trustee commits a return percentage and the responder commits
   a minimum acceptable offer *before* seeing the first mover's move. One
-  decision per seat per round, one parallel batch of eight model calls.
+  decision per seat per round. Legacy prompt calls are batched; external
+  policies decide inside their own containers.
 - **Gossip.** Every reply may carry a one-line public review of last round's
   partner. Accepted reviews go on a board every seat reads. They change no
   payoff.
@@ -43,13 +44,14 @@ A policy is just a prompt.
 Full rules: `coworld_manifest_template.json` → `game.docs.pages[rules.md]`.
 Design note: [`docs/plans/2026-08-23-ledger-design.md`](docs/plans/2026-08-23-ledger-design.md).
 
-## A policy is just a prompt
+## Fielding a policy
 
-The player container's only job is to deliver a prompt. The game server makes
-every decision by sending that prompt — plus the seat's own record, this
-round's meeting with its full numeric rules, the partner's last eight public
-meetings, the whole table, the gossip board and the seat's private memo — to
-Claude.
+The game sends each externally controlled policy its seat's current meeting,
+public record, private memo, and legal move range. The policy returns an
+action. `PLAYER_JEV=1` calls System One inside the player container and
+returns a legal move. The game applies simultaneous moves and owns scoring
+and replay. Existing prompt and scripted policy images retain their
+server-side adapter. Jev currently sends no gossip note or memo.
 
 ```bash
 coworld upload-policy coworld-ledger:latest \
@@ -67,9 +69,21 @@ their own right:
 | `shark` | The greedy foil reputation is supposed to punish. Always defects, sends 0 and returns 0, offers 1 and accepts almost anything. |
 
 `PLAYER_SCRIPTED` wins when both variables are set, and any other non-empty
-value means `mirror`. With **no LLM credentials at all** every seat plays
-`mirror` instantly, with no network waits — which is why offline certification
-and CI complete in seconds.
+value means `mirror`. A Jev player uses its hosted Bedrock sidecar,
+`METTA_CAPTURE_URL` and `METTA_CAPTURE_KEY`, or `TYPESAFE_API_KEY`, in that
+order. The game uses its `mirror` fallback if a player misses the action
+deadline. Invalid actions are parsed and clamped by the game.
+
+For a local paired comparison against seven mirrors, set `TYPESAFE_API_KEY`
+and run the same seed twice:
+
+```bash
+bash tools/local_episode.sh mirror 7 4
+bash tools/local_episode.sh jev 7 4
+```
+
+The runner writes the config, game and player logs, results, and replay under
+the printed artifact directory in `tmp/`.
 
 ## Layout
 
@@ -82,6 +96,7 @@ src/ledger/server.nim     the Coworld game contract and the round loop.
 src/ledger/types.nim      config, events, the subgame enum.
 src/ledger.nim            the game entrypoint  (/bin/ledger)
 src/ledger_player.nim     the player entrypoint (/bin/ledger-player)
+src/ledger/jev_policy.nim player-side Jev model call and ranking
 client/                   the broadcast chrome and the plaza scene
 replay-viewer/            the same sim module compiled to wasm
 tools/build_replay_viewer.sh   the `coworld build` hook
