@@ -222,7 +222,6 @@ suite "llm plumbing, offline":
     putEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "")
     putEnv("AWS_BEARER_TOKEN_BEDROCK", "")
     putEnv("METTA_CAPTURE_URL", "")
-    putEnv("TYPESAFE_API_KEY", "")
     let config = fixture(3, 6)
     let client = newLlmClient(config)
     check client.disabled
