@@ -64,7 +64,7 @@ env:
   #   (seen: cogame-chorus release run 32998942462).
   # 0.1.34 unconditionally prints "Replay liveness: verified ...", so the
   # certify gate can never pass on it. Do not pin lower.
-  COWORLD_PKG: "coworld[auth]==0.1.43"
+  COWORLD_PKG: "coworld[auth]==0.1.56"
   LIVENESS_MARKER: "Replay liveness: skipped (static replay bundle declared"
 
 jobs:
@@ -303,6 +303,7 @@ jobs:
             dist/coworld_manifest.json \
             --timeout-seconds 900 \
             --wait-hosted-smoke \
+            --wait-certification \
             --hosted-smoke-timeout-seconds 1800 \
             2>&1 | tee "$RR/upload.log"
           rc="${PIPESTATUS[0]}"
@@ -344,6 +345,24 @@ jobs:
           if rc != 0:
               raise SystemExit(f"upload-coworld exited {rc}")
           PY
+
+      - name: Read certified canonical status
+        run: |
+          set -euo pipefail
+          cow_id="$(python3 -c 'import json,os;print(json.load(open(os.environ["RR"] + "/upload.json"))["cow_id"])')"
+          uvx --from "$COWORLD_PKG" coworld status "$cow_id" --json > "$RR/status.json"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RR"])
+          status = json.loads((root / "status.json").read_text())
+          assert status["certification"]["certified"], "Hosted certification did not pass"
+          assert status["coworld"]["canonical"], "Certified version is not canonical"
+          upload = json.loads((root / "upload.json").read_text())
+          upload["canonical"] = "yes"
+          upload["hosted_certification"] = "passed"
+          (root / "upload.json").write_text(json.dumps(upload))
+          PYTHON
 
       - name: Assemble release-result.json
         if: always()
