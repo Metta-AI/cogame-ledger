@@ -117,7 +117,7 @@ when isMainModule:
     writePrivate(output / (episode & ".jsonl"), gameRecords.join("\n") & "\n")
     writePrivate(output / (episode & ".replay.json"), $(%*{
       "protocol": "ledger.replay.v1", "names": sim.names,
-      "policyNames": newSeq[string](Seats),
+      "policyNames": outcome["names"],
       "config": {"rounds": config.rounds, "seed": seed, "sampled": true,
         "schedule": sim.scheduleJson()}, "events": events, "results": outcome}) & "\n")
     runs.add(%*{"seed": seed, "episode_id": episode, "decisions": rows.len,

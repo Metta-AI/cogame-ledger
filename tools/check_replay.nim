@@ -7,6 +7,8 @@ doAssert args.len == 1, "usage: check_replay REPLAY"
 let replay = parseFile(args[0])
 var config = defaultGameConfig()
 config.update($replay["config"])
+for name in replay["results"]["names"]:
+  config.players.add(PlayerConfig(name: name.getStr()))
 var events: seq[GameEvent]
 for event in replay["events"]: events.add(eventFromJson(event))
 let frames = replayMatch(config, events)
