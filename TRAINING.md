@@ -11,23 +11,34 @@ nim r --path:src tools/export_posttrain.nim /tmp/ledger-quickfire 10 1 quickfire
 ```
 
 The exporter reads each certified `game_config` from
-`coworld_manifest_template.json`, runs ten seeded games per variant, and writes
-`train.jsonl`, `validation.jsonl`, and `manifest.json`. Seeds divisible by five
-go to validation, keeping each game entirely in one split. The published
-mirror and shark scripts alternate by seat. Each reply passes through the
-hosted parser and resolves through the native simulator. The exporter refuses
-an existing output directory.
+`coworld_manifest_template.json` and runs at least ten seeded games per variant.
+It requires clean, committed source and refuses an existing output directory.
+Private outputs include canonical trajectories, per-game replays, and a manifest.
+The published mirror and shark scripts alternate by seat; this is scripted
+simulation evidence, not a production-model evaluation. Replies use the hosted
+parser, and replayed events must reproduce the final outcomes and meeting history.
 
-Train the text policy with Metta's post-training CLI:
+Candidates require independent content review. The shared importer owns training
+admission and splits. All wording and game variants share `ledger-SEED` families.
+The source exporter removes the native API pacing interval for simulation; it
+does not establish deployed timing or sampling parity.
 
-```bash
-uv run python -m metta_posttrain.train --dataset /tmp/ledger-standard \
-  --output /tmp/ledger-model --model Qwen/Qwen2.5-0.5B-Instruct \
-  --max-steps 100 --max-length 4096
-```
+The `ledger-rules-v1` bank supports `canonical`, `plain`, `numbered`, `questions`,
+and `reordered`. Set `promptVariant` and `promptSeed` in native configuration or
+bridge resets. `mixed` requires an explicit nonnegative seed and selects its
+training wording modulo five for the episode, independently of simulation randomness.
+Only the alias introduction varies; the rules, private view, and response schema
+stay shared. Canonical system text remains unchanged. The source/bridge operator
+objective now correctly asks for median per-meeting payoff instead of cumulative payoff.
 
-The dataset is imitation of scripted play; its loss does not measure policy
-quality.
+Append `PROMPT_VARIANT PROMPT_SEED` to the exporter command to select wording.
+`heldout-briefing` and `heldout-reference` are evaluation-only; training resets
+and source exports reject them. The language bridge uses an additional `--language`
+argument and preserves parsed notes and private memos across complete rounds.
+Prompt metadata includes hashes of the actual rendered system and user messages.
+
+Compare matched scenario seeds across training and held-out wording before making
+performance claims. Scripted checks do not demonstrate resistance to training collapse.
 
 # Numeric reinforcement learning
 

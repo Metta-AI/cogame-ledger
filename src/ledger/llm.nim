@@ -26,9 +26,11 @@ import
   std/[json, math, os, random, strutils, unicode],
   bitworld/runtime,
   curly,
-  sim
+  sim, prompts
+export prompts
 
 const
+  TrainingOperatorPrompt* = "Build a strong reputation while maximizing your median per-meeting payoff."
   AnthropicUrl = "https://api.anthropic.com/v1/messages"
   AnthropicVersion = "2023-06-01"
   BedrockAnthropicVersion = "bedrock-2023-05-31"
@@ -49,6 +51,7 @@ type
     ltNone, ltSidecar, ltBedrock, ltAnthropic
 
   LlmClient* = ref object
+    selection*: PromptSelection
     curl: Curly
     transport: LlmTransport
     apiKey: string              ## anthropic transport
@@ -118,8 +121,8 @@ proc bedrockUrl(client: LlmClient): string =
   client.bedrockEndpoint & "/model/" &
     client.bedrockModels[client.bedrockModel] & "/invoke"
 
-proc newLlmClient*(config: GameConfig): LlmClient =
-  result = LlmClient(
+proc newLlmClient*(config: GameConfig, selection: PromptSelection): LlmClient =
+  result = LlmClient(selection: selection,
     model: config.model,
     maxOutputTokens: config.maxOutputTokens,
     timeoutSeconds: config.llmTimeoutSeconds
@@ -349,10 +352,8 @@ proc moveExample(game: SubGame, first: bool): string =
   of sgTrust: (if first: "4" else: "50")
   of sgUltimatum: (if first: "6" else: "4")
 
-proc systemPrompt*(sim: Sim, seat: int): string =
-  "You are " & sim.seatName(seat) & ", one of eight cogs in Ledger. Your " &
-    "alias is permanent and public:\neverything you do is on the record " &
-    "and every other cog can read it." &
+proc systemPrompt*(selection: PromptSelection, sim: Sim, seat: int): string =
+  selection.introduction(sim.seatName(seat)) &
     """
 
 Rules:
@@ -672,7 +673,7 @@ proc decideAll*(
         user.add("\nYour previous reply was invalid. Respond with ONLY the " &
           "requested JSON object, with \"move\" " &
           legalForm(meeting.game, first) & ".")
-      let request = client.requestFor(systemPrompt(sim, seat), user, seat)
+      let request = client.requestFor(systemPrompt(client.selection, sim, seat), user, seat)
       batch.post(request.url, request.headers, request.body, $index)
     let responses = client.curl.makeRequests(batch, client.timeoutSeconds)
     var stillOpen: seq[int]

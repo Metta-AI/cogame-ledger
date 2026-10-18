@@ -347,7 +347,7 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
         config.tokens.len, " players connected"
       state.broadcastLocked()
 
-    let client = newLlmClient(config)
+    let client = newLlmClient(config, promptSelection(parseJson(runtimeConfig.config)))
 
     ## The platform kills the episode at its timeout and keeps nothing. Play
     ## inside a fraction of it so results and the replay are written with
