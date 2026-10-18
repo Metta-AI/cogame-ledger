@@ -45,6 +45,7 @@ type
     move*: int          ## the raw move, already clamped into its legal range
     note*: string       ## "" when the reply carried none
     memo*: string       ## "" when the reply carried none
+    evidence*: seq[JsonNode]
     scripted*: bool     ## decided by a scripted baseline, not by the model
 
   LlmTransport = enum
@@ -659,6 +660,7 @@ proc decideAll*(
         (if kind == skNone: skMirror else: kind))
     else:
       open.add(index)
+  var evidence = newSeq[seq[JsonNode]](seats.len)
   for attempt in 0 .. 1:
     if open.len == 0 or client.disabled:
       break
@@ -675,6 +677,7 @@ proc decideAll*(
           legalForm(meeting.game, first) & ".")
       let request = client.requestFor(systemPrompt(client.selection, sim, seat), user, seat)
       batch.post(request.url, request.headers, request.body, $index)
+    let batchModel = client.bedrockModel
     let responses = client.curl.makeRequests(batch, client.timeoutSeconds)
     var stillOpen: seq[int]
     for position, index in open:
@@ -682,6 +685,7 @@ proc decideAll*(
       let pair = sim.pairIndexOf(sim.round, seat)
       let meeting = sim.plan.pairs[pair]
       let first = meeting.a == seat
+      var rejection = ""
       try:
         ## `responses` is indexed by BATCH POSITION, which is the order the
         ## requests were queued in — never the order they came back in.
@@ -692,9 +696,30 @@ proc decideAll*(
       except CatchableError as error:
         echo "ledger llm: seat ", seat, " attempt ", attempt, " failed: ",
           cleanText(error.msg, 300)
+        rejection = error.msg
         stillOpen.add(index)
+      if getEnv("LEDGER_CAPTURE_DIR").len > 0:
+        let request = parseJson(batch[position].body)
+        let system = request["system"].getStr()
+        let user = request["messages"][0]["content"].getStr()
+        evidence[index].add(%*{"attempt": attempt + 1,
+          "request_body": batch[position].body,
+          "response_body": responses[position].response.body,
+          "response_status": responses[position].response.code,
+          "transport_error": responses[position].error,
+          "transport": $client.transport,
+          "model": (if client.transport == ltBedrock:
+            client.bedrockModels[batchModel] else: client.model),
+          "prompt_template": client.selection.promptMetadata(system, user),
+          "accepted": rejection.len == 0, "rejection_reason": rejection,
+          "parsed_action": (if rejection.len == 0:
+            %*{"move": result[index].move, "note": result[index].note,
+              "memo": result[index].memo} else: newJNull())})
     open = stillOpen
   for index in open:
     let seat = seats[index]
     echo "ledger: seat ", seat, " falling back to scripted decision"
     result[index] = scriptedAction(sim, seat, skMirror)
+
+  for index in 0 ..< seats.len:
+    result[index].evidence = evidence[index]
