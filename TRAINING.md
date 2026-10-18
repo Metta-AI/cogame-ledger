@@ -37,6 +37,14 @@ and source exports reject them. The language bridge uses an additional `--langua
 argument and preserves parsed notes and private memos across complete rounds.
 Prompt metadata includes hashes of the actual rendered system and user messages.
 
+Set `LEDGER_CAPTURE_DIR` to a private directory for native host evidence.
+`host.jsonl` records actual request bodies, replies, retry decisions, prompt hashes,
+and simulator events. It excludes provider authorization headers. Empty attempt
+lists identify scripted or external decisions without inventing model calls.
+Resolved decisions and applied events are separate so simulator fallback remains
+visible. These diagnostic traces are private evidence, not automatically admitted
+training examples.
+
 Compare matched scenario seeds across training and held-out wording before making
 performance claims. Scripted checks do not demonstrate resistance to training collapse.
 
