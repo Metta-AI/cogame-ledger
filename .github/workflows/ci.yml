@@ -152,7 +152,6 @@ jobs:
       - name: Complete prompt and private source workflows
         run: |
           nim c --parallelBuild:1 -d:release --path:src -o:/tmp/ledger-bridge tools/train_bridge.nim
-          python3 tools/test_train_bridge.py /tmp/ledger-bridge
           python3 tools/test_prompt_games.py /tmp/ledger-bridge
           nim c --parallelBuild:1 -d:release --path:src -o:/tmp/ledger-exporter tools/export_posttrain.nim
           nim c --parallelBuild:1 -d:release --path:src -o:/tmp/ledger-replay tools/check_replay.nim

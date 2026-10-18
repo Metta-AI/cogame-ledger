@@ -56,6 +56,8 @@ Compile the persistent bridge and pass its manifest and variant to Metta's
 
 ```sh
 nim c -d:release --path:src -o:/tmp/ledger-train-bridge tools/train_bridge.nim
+python tools/test_prompt_games.py /tmp/ledger-train-bridge
+# Run the typed GameBridge check from an environment with Metta installed:
 python tools/test_train_bridge.py /tmp/ledger-train-bridge
 ```
 
