@@ -45,7 +45,6 @@ type
     move*: int          ## the raw move, already clamped into its legal range
     note*: string       ## "" when the reply carried none
     memo*: string       ## "" when the reply carried none
-    evidence*: seq[JsonNode]
     scripted*: bool     ## decided by a scripted baseline, not by the model
 
   LlmTransport = enum
@@ -353,9 +352,8 @@ proc moveExample(game: SubGame, first: bool): string =
   of sgTrust: (if first: "4" else: "50")
   of sgUltimatum: (if first: "6" else: "4")
 
-proc systemPrompt*(selection: PromptSelection, sim: Sim, seat: int): string =
-  selection.introduction(sim.seatName(seat)) &
-    """
+const
+  CanonicalRules = """
 
 Rules:
 - Every round you are paired with one other cog for ONE meeting. Pairings are drawn
@@ -372,12 +370,48 @@ Rules:
 - You may attach a one-line public review of your PREVIOUS round's partner. Reviews
   are signed with your alias and everyone reads them. They change no payoff.
 - YOUR SCORE IS THE MEDIAN OF YOUR PER-MEETING PAYOFFS, not the total and not the
-  mean. One huge score against a friend cannot lift a median; being reliably worth
-  meeting can. Coins are only ever paid by the game, never transferred between cogs.
+  mean. Sort your meeting payoffs: take the middle value, or the mean of the two
+  middle values for an even count. Coins are only ever paid by the game, never
+  transferred between cogs.
 
-OUTPUT FORMAT: reply with ONLY one JSON object, nothing else - no
+"""
+  ReplyRules = """OUTPUT FORMAT: reply with ONLY one JSON object, nothing else - no
 analysis, no explanation, no markdown fences, no text before or after the
 object. Your reply must begin with the character { and end with }."""
+
+proc systemPrompt*(selection: PromptSelection, sim: Sim, seat: int): string =
+  let alias = sim.seatName(seat)
+  if selection.selectedVariant == pvCanonical:
+    return "You are " & alias & ", one of eight cogs in Ledger. Your " &
+      "alias is permanent and public:\neverything you do is on the record " &
+      "and every other cog can read it." & CanonicalRules & ReplyRules
+  let identity = "You play " & alias & ", one of eight Ledger cogs. This public alias lasts " &
+    "the whole episode, and every other cog can read your recorded actions."
+  let meetings = "Each round gives you one partner and one meeting. A fixed rotation " &
+    "gives equal meeting counts against each of the other seven cogs, at most twice " &
+    "each in a fourteen-round game. Each pairing draws DILEMMA, TRUST, or ULTIMATUM; " &
+    "your meeting's exact numbers appear in the user message."
+  let timing = "All seats decide simultaneously, without seeing their current partner's " &
+    "move. In TRUST the second mover commits a return percentage; in ULTIMATUM the " &
+    "second mover commits a minimum acceptable offer. That rule is applied to the " &
+    "first mover's choice."
+  let record = "After resolution, both players' moves and payoffs immediately become " &
+    "public under their permanent aliases. You may add a one-line review of your " &
+    "previous round's partner. Everyone sees the review and your signature; it " &
+    "changes no payoff."
+  let scoring = "Your score is the MEDIAN of your per-meeting payoffs, not their total " &
+    "or mean. Sort your payoffs and take the middle value; for an even number of " &
+    "meetings, average the two middle values. Only the game pays coins; cogs cannot " &
+    "transfer them to one another."
+  result = case selection.selectedVariant
+    of pvPlain: identity & "\n\n" & meetings & "\n\n" & timing & "\n\n" & record & "\n\n" & scoring
+    of pvNumbered: "1. Identity\n" & identity & "\n2. Meetings\n" & meetings & "\n3. Simultaneous choice\n" & timing & "\n4. Public record\n" & record & "\n5. Score\n" & scoring
+    of pvQuestions: "Who am I?\n" & identity & "\nHow am I scored?\n" & scoring & "\nWho do I meet?\n" & meetings & "\nWhen do we choose?\n" & timing & "\nWhat is public?\n" & record
+    of pvReordered: "SCORING\n" & scoring & "\nINFORMATION\n" & record & "\nDECISIONS\n" & timing & "\nMEETINGS\n" & meetings & "\nIDENTITY\n" & identity
+    of pvHeldoutBriefing: "Read your assignment.\n" & identity & "\nPrepare the decision.\n" & timing & "\nTrack public information.\n" & record & "\nFollow the rotation.\n" & meetings & "\nEvaluate success.\n" & scoring
+    of pvHeldoutReference: "Meeting reference: " & meetings & "\nTiming reference: " & timing & "\nScoring reference: " & scoring & "\nIdentity reference: " & identity & "\nRecord reference: " & record
+    of pvCanonical, pvMixed: raise newException(ValueError, "alternate wording must resolve")
+  result.add("\n\n" & ReplyRules)
 
 proc operatorBlock(prompt: string): string =
   if prompt.len == 0:
@@ -660,7 +694,6 @@ proc decideAll*(
         (if kind == skNone: skMirror else: kind))
     else:
       open.add(index)
-  var evidence = newSeq[seq[JsonNode]](seats.len)
   for attempt in 0 .. 1:
     if open.len == 0 or client.disabled:
       break
@@ -677,7 +710,6 @@ proc decideAll*(
           legalForm(meeting.game, first) & ".")
       let request = client.requestFor(systemPrompt(client.selection, sim, seat), user, seat)
       batch.post(request.url, request.headers, request.body, $index)
-    let batchModel = client.bedrockModel
     let responses = client.curl.makeRequests(batch, client.timeoutSeconds)
     var stillOpen: seq[int]
     for position, index in open:
@@ -685,7 +717,6 @@ proc decideAll*(
       let pair = sim.pairIndexOf(sim.round, seat)
       let meeting = sim.plan.pairs[pair]
       let first = meeting.a == seat
-      var rejection = ""
       try:
         ## `responses` is indexed by BATCH POSITION, which is the order the
         ## requests were queued in — never the order they came back in.
@@ -696,30 +727,9 @@ proc decideAll*(
       except CatchableError as error:
         echo "ledger llm: seat ", seat, " attempt ", attempt, " failed: ",
           cleanText(error.msg, 300)
-        rejection = error.msg
         stillOpen.add(index)
-      if getEnv("LEDGER_CAPTURE_DIR").len > 0:
-        let request = parseJson(batch[position].body)
-        let system = request["system"].getStr()
-        let user = request["messages"][0]["content"].getStr()
-        evidence[index].add(%*{"attempt": attempt + 1,
-          "request_body": batch[position].body,
-          "response_body": responses[position].response.body,
-          "response_status": responses[position].response.code,
-          "transport_error": responses[position].error,
-          "transport": $client.transport,
-          "model": (if client.transport == ltBedrock:
-            client.bedrockModels[batchModel] else: client.model),
-          "prompt_template": client.selection.promptMetadata(system, user),
-          "accepted": rejection.len == 0, "rejection_reason": rejection,
-          "parsed_action": (if rejection.len == 0:
-            %*{"move": result[index].move, "note": result[index].note,
-              "memo": result[index].memo} else: newJNull())})
     open = stillOpen
   for index in open:
     let seat = seats[index]
     echo "ledger: seat ", seat, " falling back to scripted decision"
     result[index] = scriptedAction(sim, seat, skMirror)
-
-  for index in 0 ..< seats.len:
-    result[index].evidence = evidence[index]

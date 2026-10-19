@@ -30,14 +30,11 @@ import
   mummy,
   mummy/routers,
   llm,
-  evidence,
   sim
 
 const
   MaxPromptLen = 4000
   ReplayVersion = 1
-  LedgerSourceRevision = staticExec("git rev-parse HEAD").strip()
-  LedgerSourceDirty = staticExec("git status --porcelain").strip().len > 0
 
   PlayBudgetFraction* = 0.6
     ## Share of the platform's episode timeout spent playing. The rest covers
@@ -333,14 +330,6 @@ proc meetingLog(sim: Sim, pair: int): string =
 proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
   {.gcsafe.}:
     let config = state.config
-    let selection = promptSelection(parseJson(runtimeConfig.config))
-    let captureDirectory = getEnv("LEDGER_CAPTURE_DIR")
-    let trace = captureDirectory / "host.jsonl"
-    if captureDirectory.len > 0:
-      writePrivate(trace, $(%*{"event_type": "host_started", "visibility": "private",
-        "source_revision": LedgerSourceRevision, "source_dirty": LedgerSourceDirty,
-        "config": parseJson(runtimeConfig.config),
-        "prompt_selection": selection.selectionMetadata()}) & "\n")
     let gameStart = epochTime()
     let connectDeadline = gameStart + config.playerConnectTimeoutSeconds
 
@@ -358,7 +347,7 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
         config.tokens.len, " players connected"
       state.broadcastLocked()
 
-    let client = newLlmClient(config, selection)
+    let client = newLlmClient(config, promptSelection(parseJson(runtimeConfig.config)))
 
     ## The platform kills the episode at its timeout and keeps nothing. Play
     ## inside a fraction of it so results and the replay are written with
@@ -468,10 +457,8 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
             if not state.actions[seat].isNil:
               let pair = state.sim.pairIndexOf(state.sim.round, seat)
               let meeting = state.sim.plan.pairs[pair]
-              let modelEvidence = decisions[seat].evidence
               decisions[seat] = parseDecision(meeting.game,
                 meeting.a == seat, state.actions[seat])
-              decisions[seat].evidence = modelEvidence
             else:
               echo "ledger: seat ", seat,
                 " missed action deadline; using mirror fallback"
@@ -489,18 +476,6 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
         for seat in 0 ..< Seats:
           notes[seat] = decisions[seat].note
           memos[seat] = decisions[seat].memo
-        if captureDirectory.len > 0:
-          for seat in seats:
-            appendPrivate(trace, %*{"event_type": "decision_resolved", "visibility": "private",
-              "round": simCopy.round, "seat": seat, "view": observationJson(simCopy, seat),
-              "prompt_selection": selection.selectionMetadata(),
-              "external": externalCopy[seat],
-              "external_action": (if externalCopy[seat]: state.actions[seat] else: newJNull()),
-              "attempts": decisions[seat].evidence,
-              "resolved_action": {"move": decisions[seat].move,
-                "note": decisions[seat].note, "memo": decisions[seat].memo},
-              "scripted": decisions[seat].scripted})
-        let firstEvent = state.sim.events.len
         ## Steps 4-8: one transactional apply.
         try:
           state.sim.applyRound(moves, notes, memos, flags)
@@ -517,10 +492,6 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
             safeFlags[pair] = [true, true]
           state.sim.applyRound(safeMoves, newSeq[string](Seats),
             newSeq[string](Seats), safeFlags)
-        if captureDirectory.len > 0:
-          for index in firstEvent ..< state.sim.events.len:
-            appendPrivate(trace, %*{"event_type": "action_applied", "visibility": "private",
-              "event": state.sim.events[index].eventToJson()})
         for pair in 0 ..< Meetings:
           echo "ledger: round ", state.sim.round + 1, " ",
             meetingLog(state.sim, pair)
@@ -543,10 +514,6 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
         if elapsedMs < intervalMs:
           sleep(intervalMs - elapsedMs)
 
-    if captureDirectory.len > 0:
-      withLock stateLock:
-        appendPrivate(trace, %*{"event_type": "host_completed", "visibility": "private",
-          "result": state.sim.resultsJson()})
     finishEpisode(runtimeConfig)
 
 var gameThread: Thread[RuntimeConfig]

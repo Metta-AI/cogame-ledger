@@ -17,7 +17,7 @@ type
     seed*: int
 
 const
-  PromptBankVersion* = "ledger-rules-v1"
+  PromptBankVersion* = "ledger-rules-v2"
 
 proc promptSelection*(node: JsonNode): PromptSelection =
   if node.kind != JObject:
@@ -47,15 +47,3 @@ proc promptMetadata*(selection: PromptSelection, system, user: string): JsonNode
 proc selectionMetadata*(selection: PromptSelection): JsonNode =
   %*{"bank": PromptBankVersion, "variant": $selection.selectedVariant,
     "selection": $selection.variant, "seed": selection.seed}
-
-proc introduction*(selection: PromptSelection, alias: string): string =
-  result = case selection.selectedVariant
-    of pvCanonical: "You are <ALIAS>, one of eight cogs in Ledger. Your alias is permanent and public:\neverything you do is on the record and every other cog can read it."
-    of pvPlain: "In Ledger you play <ALIAS>, one of eight cogs. Your public alias stays the same.\nEverything you do is recorded for every other cog to read."
-    of pvNumbered: "1. You are <ALIAS>, one of the eight cogs playing Ledger.\n2. Your alias is public and permanent.\n3. Everything you do goes on a record that every other cog can read."
-    of pvQuestions: "Who are you? <ALIAS>, one of eight cogs in Ledger.\nDoes your public alias change? No; it is permanent.\nWho can read the record of everything you do? Every other cog."
-    of pvReordered: "Every other cog can read the record of everything you do in Ledger.\nYou are <ALIAS>, one of eight cogs, and your public alias is permanent."
-    of pvHeldoutBriefing: "Ledger briefing: your identity is <ALIAS>. You are one of eight cogs.\nThat alias remains public and permanent; every other cog can read everything you do on the record."
-    of pvHeldoutReference: "Game: Ledger. Players: eight cogs. Your alias: <ALIAS>.\nAlias visibility and duration: public and permanent.\nRecord access: every other cog can read everything you do."
-    of pvMixed: raise newException(Defect, "unresolved mixed wording")
-  result = result.replace("<ALIAS>", alias)

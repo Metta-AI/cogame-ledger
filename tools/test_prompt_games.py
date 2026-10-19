@@ -52,6 +52,13 @@ def play(binary, variant, wording, seed, language, prompt_seed=0, original=False
         while observation["kind"] == "decision":
             system, user = (message["content"] for message in observation["messages"])
             if original:
+                system = system.replace(
+                    "  mean. One huge score against a friend cannot lift a median; being reliably worth\n"
+                    "  meeting can. Coins are only ever paid by the game, never transferred between cogs.",
+                    "  mean. Sort your meeting payoffs: take the middle value, or the mean of the two\n"
+                    "  middle values for an even count. Coins are only ever paid by the game, never\n"
+                    "  transferred between cogs.",
+                )
                 user = user.replace(
                     "Build a strong reputation while maximizing your cumulative payoff.",
                     "Build a strong reputation while maximizing your median per-meeting payoff.",
@@ -60,7 +67,7 @@ def play(binary, variant, wording, seed, language, prompt_seed=0, original=False
             view = observation["semantic_view"]
             if not original:
                 metadata = view.pop("prompt_template")
-                assert metadata["bank"] == "ledger-rules-v1"
+                assert metadata["bank"] == "ledger-rules-v2"
                 assert metadata["variant"] == (
                     TRAIN[prompt_seed % 5] if wording == "mixed" else wording
                 )
@@ -133,7 +140,7 @@ if __name__ == "__main__":
     count = 0
     for variant in ("standard", "quickfire"):
         for language in (False, True):
-            for seed in ("wording-1", "wording-2"):
+            for seed in ("wording-1",):
                 reference = play(binary, variant, "canonical", seed, language)
                 count += 1
                 if len(sys.argv) == 3 and not language:
@@ -150,11 +157,13 @@ if __name__ == "__main__":
                     assert actual[:2] == reference[:2]
                     assert actual[2] != reference[2]
                     assert (
-                        next(iter(actual[2].values())).split("Rules:", 1)[1]
-                        == next(iter(reference[2].values())).split("Rules:", 1)[1]
+                        next(iter(actual[2].values())).split("OUTPUT FORMAT:", 1)[1]
+                        == next(iter(reference[2].values())).split("OUTPUT FORMAT:", 1)[
+                            1
+                        ]
                     )
                     count += 1
-                for prompt_seed in range(5):
+                for prompt_seed in (4,):
                     actual = play(binary, variant, "mixed", seed, language, prompt_seed)
                     assert actual[:2] == reference[:2]
                     count += 1

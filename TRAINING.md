@@ -12,23 +12,23 @@ nim r --path:src tools/export_posttrain.nim /tmp/ledger-quickfire 10 1 quickfire
 
 The exporter reads each certified `game_config` from
 `coworld_manifest_template.json` and runs at least ten seeded games per variant.
-It requires clean, committed source and refuses an existing output directory.
-Private outputs include canonical trajectories, per-game replays, and a manifest.
-The published mirror and shark scripts alternate by seat; this is scripted
-simulation evidence, not a production-model evaluation. Replies use the hosted
-parser, and replayed events must reproduce the final outcomes and meeting history.
+The original train/validation JSONL format and manifest are retained. Teacher games
+alternate mirror and shark seats. Prompt selection and exact message hashes accompany
+each row. Scenario families use `ledger-SEED` across both game variants; every fifth
+scenario is validation. Mixed exports cycle wordings separately within each split
+so the validation schedule cannot remove a presentation from training.
 
-Candidates require independent content review. The shared importer owns training
-admission and splits. All wording and game variants share `ledger-SEED` families.
-The source exporter removes the native API pacing interval for simulation; it
-does not establish deployed timing or sampling parity.
+The exporter removes native API pacing for simulation. Run it from clean committed
+source so the manifest's revision identifies the code. Outputs require content review
+before training; scripted games do not establish model quality.
 
-The `ledger-rules-v1` bank supports `canonical`, `plain`, `numbered`, `questions`,
+The `ledger-rules-v2` bank supports `canonical`, `plain`, `numbered`, `questions`,
 and `reordered`. Set `promptVariant` and `promptSeed` in native configuration or
 bridge resets. `mixed` requires an explicit nonnegative seed and selects its
 training wording modulo five for the episode, independently of simulation randomness.
-Only the alias introduction varies; the rules, private view, and response schema
-stay shared. Canonical system text remains unchanged. The source/bridge operator
+Complete identity, meeting rotation, simultaneous decisions, public records, and
+median scoring explanations vary in wording and order. The response schema stays fixed. Canonical text now states the exact median calculation instead of claiming that
+one favorable meeting cannot change it. The source/bridge operator
 objective now correctly asks for median per-meeting payoff instead of cumulative payoff.
 
 Append `PROMPT_VARIANT PROMPT_SEED` to the exporter command to select wording.
@@ -36,14 +36,6 @@ Append `PROMPT_VARIANT PROMPT_SEED` to the exporter command to select wording.
 and source exports reject them. The language bridge uses an additional `--language`
 argument and preserves parsed notes and private memos across complete rounds.
 Prompt metadata includes hashes of the actual rendered system and user messages.
-
-Set `LEDGER_CAPTURE_DIR` to a private directory for native host evidence.
-`host.jsonl` records actual request bodies, replies, retry decisions, prompt hashes,
-and simulator events. It excludes provider authorization headers. Empty attempt
-lists identify scripted or external decisions without inventing model calls.
-Resolved decisions and applied events are separate so simulator fallback remains
-visible. These diagnostic traces are private evidence, not automatically admitted
-training examples.
 
 Compare matched scenario seeds across training and held-out wording before making
 performance claims. Scripted checks do not demonstrate resistance to training collapse.
