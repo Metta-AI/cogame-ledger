@@ -22,7 +22,7 @@ The exporter removes native API pacing for simulation. Run it from clean committ
 source so the manifest's revision identifies the code. Outputs require content review
 before training; scripted games do not establish model quality.
 
-The `ledger-rules-v2` bank supports `canonical`, `plain`, `numbered`, `questions`,
+The `ledger-rules-v3` bank supports `canonical`, `plain`, `numbered`, `questions`,
 and `reordered`. Set `promptVariant` and `promptSeed` in native configuration or
 bridge resets. `mixed` requires an explicit nonnegative seed and selects its
 training wording modulo five for the episode, independently of simulation randomness.
@@ -67,3 +67,6 @@ split. Omitted, training, and unrecognized splits reject them.
 
 Exported episode IDs include the selected wording and prompt seed, so matched
 wording collections remain distinct. The gameplay seed still groups related scenarios.
+
+Version three independently phrases the numbered, question-led, reordered, and
+held-out rules. Canonical/plain text and the action contract remain unchanged.

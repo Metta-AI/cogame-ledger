@@ -405,11 +405,40 @@ proc systemPrompt*(selection: PromptSelection, sim: Sim, seat: int): string =
     "transfer them to one another."
   result = case selection.selectedVariant
     of pvPlain: identity & "\n\n" & meetings & "\n\n" & timing & "\n\n" & record & "\n\n" & scoring
-    of pvNumbered: "1. Identity\n" & identity & "\n2. Meetings\n" & meetings & "\n3. Simultaneous choice\n" & timing & "\n4. Public record\n" & record & "\n5. Score\n" & scoring
-    of pvQuestions: "Who am I?\n" & identity & "\nHow am I scored?\n" & scoring & "\nWho do I meet?\n" & meetings & "\nWhen do we choose?\n" & timing & "\nWhat is public?\n" & record
-    of pvReordered: "SCORING\n" & scoring & "\nINFORMATION\n" & record & "\nDECISIONS\n" & timing & "\nMEETINGS\n" & meetings & "\nIDENTITY\n" & identity
-    of pvHeldoutBriefing: "Read your assignment.\n" & identity & "\nPrepare the decision.\n" & timing & "\nTrack public information.\n" & record & "\nFollow the rotation.\n" & meetings & "\nEvaluate success.\n" & scoring
-    of pvHeldoutReference: "Meeting reference: " & meetings & "\nTiming reference: " & timing & "\nScoring reference: " & scoring & "\nIdentity reference: " & identity & "\nRecord reference: " & record
+    of pvNumbered: """1. Your public identity is <ALIAS>. Ledger has eight cogs, and each keeps its alias throughout the episode. Other cogs can read the actions recorded against yours.
+2. Play one meeting with one partner each round. The fixed rotation gives you equally many meetings with each of the other seven cogs, no more than two apiece in a fourteen-round episode. DILEMMA, TRUST, or ULTIMATUM is drawn for each pairing; consult the user message for the numerical rules.
+3. Choose before anyone sees their current partner's choice. All seats act simultaneously. A TRUST second mover supplies a return percentage; an ULTIMATUM second mover supplies the lowest acceptable offer. The submitted rule is then applied to the first mover's action.
+4. Resolved moves and payoffs are immediately published under both permanent aliases. You can sign a one-line public review of last round's partner. Everyone can read it, but it cannot alter a payoff.
+5. Maximize your median meeting payoff. Order your payoffs and use the middle one, or average the central pair when the count is even. Neither their sum nor their arithmetic mean is your score. Coins come from the game; direct transfers between cogs are unavailable.""".replace("<ALIAS>", alias)
+    of pvQuestions: """Who am I? You are <ALIAS>, one of Ledger's eight cogs. That public name stays with you for the episode, and your recorded actions are readable by every other cog.
+What determines my result? Your score is the median of your meeting payoffs: sort them, select the central value for an odd count, and average the two central values for an even count. Do not substitute the total or the mean of all payoffs. Payments come only from the game, never from transfers between cogs.
+How are meetings assigned? Each round pairs you with one cog for one meeting. Rotation balances the number of meetings with each of your seven possible partners, with at most two per partner in fourteen rounds. Each pair draws one of DILEMMA, TRUST, and ULTIMATUM. The user message provides its precise numbers.
+When do I see the other move? Only after choosing: every seat decides simultaneously. In TRUST, the second mover precommits a percentage to return. In ULTIMATUM, that mover precommits a minimum offer to accept. Resolution applies this rule to the first mover's choice.
+What becomes public? Once a meeting resolves, both moves and payoffs are immediately attached to the participants' permanent aliases for everyone to read. A one-line review of your previous round's partner is optional, public, signed by you, and has no effect on payoffs.""".replace("<ALIAS>", alias)
+    of pvReordered: """PAYOFF
+Use the median of your per-meeting payoffs as your objective. With the payoffs sorted, an odd-sized list contributes its middle entry; an even-sized list contributes the average of its two middle entries. Scoring uses neither the list's total nor its overall mean. Only the game can pay coins; players cannot pass coins to each other.
+PUBLIC HISTORY
+Each resolved meeting immediately exposes both participants' actions and earnings under their permanent aliases. You may publish a single-line review about the partner you had in the preceding round. It carries your signature, is visible to everyone, and changes no earnings.
+CHOICE
+No seat sees its partner's current move before submitting its own: submissions are simultaneous. The second mover in TRUST specifies a return percentage, while the second mover in ULTIMATUM specifies a minimum acceptable offer. This advance instruction is evaluated against the first mover's submitted move.
+SCHEDULE
+One round means one meeting with one partner. A fixed rotation distributes your meetings equally across the other seven cogs, with each encountered at most twice in a fourteen-round game. Each pairing is assigned a draw of DILEMMA, TRUST, or ULTIMATUM; the user message states the exact numerical rules.
+IDENTITY
+You are <ALIAS>. There are eight cogs in Ledger. Your alias is public and persists for the entire episode; all other cogs can inspect the actions in your record.""".replace("<ALIAS>", alias)
+    of pvHeldoutBriefing: """Take the seat named <ALIAS> at this eight-cog Ledger table. Your name is public and will not change during the episode. The other seven cogs can inspect your recorded actions.
+
+Prepare a choice for one partner in each round. Pairings follow a fixed rotation, so each possible partner meets you equally often, up to twice in a fourteen-round game. Each pairing draws its meeting from DILEMMA, TRUST, and ULTIMATUM. Read the accompanying user message for the exact values involved.
+
+Your partner's current choice is unavailable when you act; all seats commit at the same time. If you are the second mover in TRUST, commit the percentage you will return. If you are the second mover in ULTIMATUM, commit the smallest offer you will accept. The game applies that commitment to the first mover's choice.
+
+After settlement, both choices and their payoffs immediately enter the public record under the two permanent aliases. You may also submit a signed, one-line review of the partner from your previous round. Everyone receives that review, and it has no power to change a payoff.
+
+Judge success by the median payoff across your meetings. Arrange those payoffs from low to high: an odd count uses the middle entry, and an even count uses the average of the central two. Adding all payoffs or averaging the whole list does not give your score. The game is the sole payer of coins; there is no cog-to-cog transfer mechanism.""".replace("<ALIAS>", alias)
+    of pvHeldoutReference: """Seat record: <ALIAS> is your public alias among eight Ledger participants. It remains fixed for this episode. Every participant may read the actions recorded under another participant's alias.
+Meeting allocation: each round contains a single meeting for you against one partner. The fixed rotation ensures equal encounter counts for the seven other cogs, bounded by two encounters each over fourteen rounds. A pairing draws DILEMMA, TRUST, or ULTIMATUM. Its numeric parameters are supplied in the user message.
+Commitment protocol: every seat submits without first observing its current partner's submission. TRUST requires its second mover to name a return percentage in advance; ULTIMATUM requires its second mover to name an acceptance threshold. That threshold is the minimum acceptable offer. The second mover's rule is applied to the first mover's action.
+Disclosure and reviews: resolution immediately makes both actions and payoffs public, attributed to the permanent aliases of both participants. An optional one-line review concerns your preceding round's partner, bears your signature, and is visible to all. It cannot affect payoffs.
+Score definition: take the median of the meeting payoffs, not their sum or their full-list average. After sorting, select the middle payoff if there are an odd number; otherwise average the two middle payoffs. Coins are issued exclusively by the game and cannot be transferred from one cog to another.""".replace("<ALIAS>", alias)
     of pvCanonical, pvMixed: raise newException(ValueError, "alternate wording must resolve")
   result.add("\n\n" & ReplyRules)
 
