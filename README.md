@@ -5,7 +5,7 @@
 Eight cogs under permanent public aliases. Fourteen rounds of randomly paired
 one-shot dilemmas — prisoner's dilemma, trust, ultimatum, drawn per pairing. A
 public gossip board. And a leaderboard that ranks by the **median** payoff you
-get from strangers: the one statistic a cartel cannot pump.
+get across meetings.
 
 A policy is a prompt, a scripted baseline, or an external action player.
 
@@ -34,8 +34,8 @@ A policy is a prompt, a scripted baseline, or an external action player.
   partner. Accepted reviews go on a board every seat reads. They change no
   payoff.
 - **Your score is the MEDIAN of your per-meeting payoffs.** Not the total, not
-  the mean. A ring can feed one alias a big number twice; it cannot move the
-  median that alias earns against the other six strangers.
+  the mean. Sort the meeting payoffs and take the middle value, or the mean
+  of the two middle values when the number of meetings is even.
 - **Rings are measured, drawn and published — never scored.** Pairs that pay
   each other far more than they earn elsewhere are flagged, drawn as red
   threads in the replay, and counted in the results. Nothing is disqualified,

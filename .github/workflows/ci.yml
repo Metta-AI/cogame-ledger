@@ -149,6 +149,11 @@ jobs:
           done
           exit "${fail}"
 
+      - name: Complete prompt games
+        run: |
+          nim c --parallelBuild:1 -d:release --path:src -o:/tmp/ledger-bridge tools/train_bridge.nim
+          python3 tools/test_prompt_games.py /tmp/ledger-bridge
+
   # ---------------------------------------------------------------------
   # Packaging smoke: the production image builds, and one real episode runs
   # end to end in raw docker with the certification fixture's seat mix.

@@ -4,8 +4,10 @@
 import std/[json, os]
 import ledger/[llm, sim]
 
-const OperatorPrompt = "Build a strong reputation while maximizing your cumulative payoff."
+
 const ActionSlots = 101
+var selection: PromptSelection
+var languageMode = false
 
 proc seedOf(value: string): int =
   var hash = 2166136261'u32
@@ -29,7 +31,7 @@ proc decision(game: Sim, id, seat: int): JsonNode =
   var history = newJArray()
   for record in game.history:
     history.add(meetingJson(record))
-  %*{
+  result = %*{
     "kind": "decision", "game": "ledger", "decision_id": id,
     "seat": seat, "engine_seat": seat, "turn": game.round,
     "semantic_view": {
@@ -41,14 +43,21 @@ proc decision(game: Sim, id, seat: int): JsonNode =
     },
     "inbox": [],
     "messages": [
-      {"role": "system", "content": systemPrompt(game, seat)},
-      {"role": "user", "content": userPrompt(game, seat, OperatorPrompt)}
+      {"role": "system", "content": systemPrompt(selection, game, seat)},
+      {"role": "user", "content": userPrompt(game, seat, TrainingOperatorPrompt)}
     ],
     "speech_messages": [],
     "action_schema": {"type": "object", "required": ["move"],
       "properties": {"move": {"type": "integer"}}},
     "typed_question": newJNull()
   }
+
+  result["semantic_view"]["prompt_template"] = selection.promptMetadata(
+    result["messages"][0]["content"].getStr(), result["messages"][1]["content"].getStr())
+  if languageMode:
+    result["inference_mode"] = %"text_action"
+    result["action_schema"] = %*{"type": "object", "required": ["move"],
+      "properties": {"move": {}, "note": {"type": "string"}, "memo": {"type": "string"}}}
 
 proc encoding(game: Sim, id, seat: int): JsonNode =
   let pair = game.pairIndexOf(game.round, seat)
@@ -99,9 +108,12 @@ proc encoding(game: Sim, id, seat: int): JsonNode =
 
 when isMainModule:
   let args = commandLineParams()
-  if args.len notin 1 .. 2:
-    quit("usage: ledger-train-bridge MANIFEST [standard|quickfire]", 1)
-  let variant = if args.len == 2: args[1] else: "standard"
+  if args.len notin 1 .. 3:
+    quit("usage: ledger-train-bridge MANIFEST [standard|quickfire] [--language]", 1)
+  if args.len == 3:
+    doAssert args[2] == "--language"
+    languageMode = true
+  let variant = if args.len >= 2: args[1] else: "standard"
   let manifest = parseFile(args[0])
   var variantConfig: JsonNode
   for entry in manifest["variants"]:
@@ -111,6 +123,8 @@ when isMainModule:
   var game: Sim
   var moves: array[Meetings, array[2, int]]
   var flags: array[Meetings, array[2, bool]]
+  var notes = newSeq[string](Seats)
+  var memos = newSeq[string](Seats)
   var id = 0
   var seat = 0
   while not stdin.endOfFile:
@@ -118,6 +132,13 @@ when isMainModule:
     var response: JsonNode
     case request["kind"].getStr()
     of "reset":
+      selection = promptSelection(request)
+      if selection.selectedVariant in {pvHeldoutBriefing, pvHeldoutReference}:
+        doAssert request.hasKey("split") and
+          request["split"].getStr() in ["evaluation", "validation", "test"],
+          "held-out wording requires an explicit evaluation split"
+      notes = newSeq[string](Seats)
+      memos = newSeq[string](Seats)
       doAssert request["players"].getInt() == Seats
       var config = defaultGameConfig()
       let runtimeConfig = copy(variantConfig)
@@ -138,21 +159,26 @@ when isMainModule:
       doAssert not game.done
       let teacher = scriptedAction(game, seat,
         if seat mod 2 == 0: skMirror else: skShark)
-      response = %*{"response": $(%*{"move": teacher.move})}
+      response = %*{"response": $(if languageMode:
+        %*{"move": teacher.move, "note": teacher.note, "memo": teacher.memo}
+        else: %*{"move": teacher.move})}
     of "step":
       doAssert not game.done and request["decision_id"].getInt() == id
-      let action = parseJson(request["response"].getStr())
+      let action = if languageMode: extractJsonObject(request["response"].getStr())
+        else: parseJson(request["response"].getStr())
       let pair = game.pairIndexOf(game.round, seat)
       let meeting = game.plan.pairs[pair]
       let first = meeting.a == seat
       let parsed = parseDecision(meeting.game, first, action)
+      if languageMode:
+        notes[seat] = parsed.note
+        memos[seat] = parsed.memo
       moves[pair][if first: 0 else: 1] = parsed.move
       flags[pair][if first: 0 else: 1] = false
       inc id
       var observation: JsonNode
       if seat == Seats - 1:
-        game.applyRound(moves, newSeq[string](Seats),
-          newSeq[string](Seats), flags)
+        game.applyRound(moves, notes, memos, flags)
         if game.done:
           let outcome = game.resultsJson()
           var scores = newJObject()
@@ -166,7 +192,8 @@ when isMainModule:
       else:
         inc seat
         observation = game.decision(id, seat)
-      response = %*{"kind": "accepted", "action": action,
+      response = %*{"kind": "accepted", "action": (if languageMode:
+        %*{"move": parsed.move, "note": parsed.note, "memo": parsed.memo} else: action),
         "observation": observation}
     else:
       raise newException(ValueError, "unknown command: " & request["kind"].getStr())

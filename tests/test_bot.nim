@@ -223,7 +223,7 @@ suite "llm plumbing, offline":
     putEnv("AWS_BEARER_TOKEN_BEDROCK", "")
     putEnv("METTA_CAPTURE_URL", "")
     let config = fixture(3, 6)
-    let client = newLlmClient(config)
+    let client = newLlmClient(config, PromptSelection())
     check client.disabled
     var sim = initSim(config)
     sim.beginRound()
