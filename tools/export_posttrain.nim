@@ -74,7 +74,7 @@ when isMainModule:
           let user = userPrompt(sim, seat, TrainingOperatorPrompt)
           rows.add($(%*{
             "episode_id": "ledger-" & variant & "-" & $seed & "-" &
-              $selection.selectedVariant & "-" & $selection.seed,
+              $selection.variant & "-" & $selection.selectedVariant & "-" & $selection.seed,
             "seed": "ledger-" & $seed,
             "prompt_template": selection.promptMetadata(system, user),
             "decision_id": rows.len,
