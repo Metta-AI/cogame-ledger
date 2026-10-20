@@ -133,9 +133,10 @@ when isMainModule:
     case request["kind"].getStr()
     of "reset":
       selection = promptSelection(request)
-      if request.hasKey("split") and request["split"].getStr() == "train":
-        doAssert selection.selectedVariant notin {pvHeldoutBriefing, pvHeldoutReference},
-          "held-out wording is evaluation only"
+      if selection.selectedVariant in {pvHeldoutBriefing, pvHeldoutReference}:
+        doAssert request.hasKey("split") and
+          request["split"].getStr() in ["evaluation", "validation", "test"],
+          "held-out wording requires an explicit evaluation split"
       notes = newSeq[string](Seats)
       memos = newSeq[string](Seats)
       doAssert request["players"].getInt() == Seats

@@ -61,3 +61,6 @@ numeric policy sends no free-form notes or memos; the hosted prompts and
 post-training exporter retain that channel. Even seats use the `mirror`
 teacher and odd seats use `shark`. Complete games return native median-payoff
 scores.
+
+Held-out bridge wordings require an explicit `evaluation`, `validation`, or `test`
+split. Omitted, training, and unrecognized splits reject them.
