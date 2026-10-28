@@ -23,10 +23,10 @@
 ## scripted plays one deliberately, LLM or not.
 
 import
-  std/[json, math, os, random, strutils, unicode],
+  std/[json, math, os, random, strutils, times, unicode],
   bitworld/runtime,
   curly,
-  sim, prompts
+  sim, prompts, training_capture
 export prompts
 
 const
@@ -708,7 +708,8 @@ proc decideAll*(
   sim: Sim,
   seats: seq[int],
   prompts: seq[string],
-  scripted: seq[ScriptKind]
+  scripted: seq[ScriptKind],
+  capture: RuntimeCapture = nil
 ): seq[Decision] =
   ## One decision per seat in `seats`, in order, from ONE parallel batch of
   ## HTTP requests. Never raises: any failure falls back to the scripted
@@ -739,21 +740,42 @@ proc decideAll*(
           legalForm(meeting.game, first) & ".")
       let request = client.requestFor(systemPrompt(client.selection, sim, seat), user, seat)
       batch.post(request.url, request.headers, request.body, $index)
+      if capture != nil:
+        try: capture.requestedAttempt(sim.round, seat, attempt, request.body)
+        except CatchableError as error: capture.captureGap(sim.round, seat, error.msg)
+    let batchStarted = if capture != nil: epochTime() else: 0.0
     let responses = client.curl.makeRequests(batch, client.timeoutSeconds)
+    let batchElapsedMs = if capture != nil: (epochTime() - batchStarted) * 1000.0 else: 0.0
     var stillOpen: seq[int]
     for position, index in open:
       let seat = seatForBatchPosition(seats, open, position)
       let pair = sim.pairIndexOf(sim.round, seat)
       let meeting = sim.plan.pairs[pair]
       let first = meeting.a == seat
+      if capture != nil:
+        try:
+          capture.receivedAttempt(sim.round, seat, attempt,
+            responses[position].response, responses[position].error, batchElapsedMs)
+        except CatchableError as error: capture.captureGap(sim.round, seat, error.msg)
       try:
         ## `responses` is indexed by BATCH POSITION, which is the order the
         ## requests were queued in — never the order they came back in.
         let text = client.textOf(responses[position].response,
           responses[position].error, batch[position].url)
+        if capture != nil:
+          try: capture.decodedText(sim.round, seat, attempt, text)
+          except CatchableError as error: capture.captureGap(sim.round, seat, error.msg)
         result[index] = parseDecision(meeting.game, first,
           extractJsonObject(text))
+        if capture != nil:
+          try:
+            capture.parsedAttempt(sim.round, seat, attempt, result[index].move,
+              result[index].note, result[index].memo)
+          except CatchableError as error: capture.captureGap(sim.round, seat, error.msg)
       except CatchableError as error:
+        if capture != nil:
+          try: capture.failedAttempt(sim.round, seat, attempt, error.msg)
+          except CatchableError as captureError: capture.captureGap(sim.round, seat, captureError.msg)
         echo "ledger llm: seat ", seat, " attempt ", attempt, " failed: ",
           cleanText(error.msg, 300)
         stillOpen.add(index)
