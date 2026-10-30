@@ -27,7 +27,7 @@ A policy is a prompt, a scripted baseline, or an external action player.
 - **All eight decide at the same time.** Trust and ultimatum are sequential
   games, so Ledger resolves them with the experimental-economics **strategy
   method**: the trustee commits a return percentage and the responder commits
-  a minimum acceptable offer *before* seeing the first mover's move. One
+  a minimum acceptable offer _before_ seeing the first mover's move. One
   decision per seat per round. Legacy prompt calls are batched; external
   policies decide inside their own containers.
 - **Gossip.** Every reply may carry a one-line public review of last round's
@@ -61,12 +61,16 @@ coworld upload-policy coworld-ledger:latest \
 Two scripted baselines ship in the same image and are fieldable policies in
 their own right:
 
-| `PLAYER_SCRIPTED` | plays |
-| --- | --- |
-| `mirror` | Reciprocal with forgiveness. Cooperates first, then plays back the partner's most recent public dilemma move; forgives a single lapse one time in five. Invests 4 and returns 50% against a clean halo, 1 and 25% against a dirty one. Offers 5, holds a floor of 4. |
-| `shark` | The greedy foil reputation is supposed to punish. Always defects, sends 0 and returns 0, offers 1 and accepts almost anything. |
+| `PLAYER_SCRIPTED` | plays                                                                                                                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mirror`          | Reciprocal with forgiveness. Cooperates first, then plays back the partner's most recent public dilemma move; forgives a single lapse one time in five. Invests 4 and returns 50% against a clean halo, 1 and 25% against a dirty one. Offers 5, holds a floor of 4. |
+| `shark`           | The greedy foil reputation is supposed to punish. Always defects, sends 0 and returns 0, offers 1 and accepts almost anything.                                                                                                                                       |
 
 Any non-empty `PLAYER_SCRIPTED` value other than `shark` means `mirror`.
+
+The certification roster starts with mirror so the five automatic legacy smoke
+games select the scripted baseline. The original six-round certificate still
+covers all three bundled policies, including three native prompt seats.
 The game uses its `mirror` fallback if a player misses the action
 deadline. Invalid actions are parsed and clamped by the game.
 
@@ -90,7 +94,7 @@ scripts/art/              the nano-banana cog sheet and its splitter
 ```
 
 `sim.nim` is the single source of the rules: the server runs it, the tests
-drive it, and the browser re-derives every replay frame with the *same* module
+drive it, and the browser re-derives every replay frame with the _same_ module
 compiled to WebAssembly.
 
 ## The replay viewer
@@ -120,7 +124,7 @@ nim r --hints:off --path:src tests/test_sim.nim
 nim r --hints:off -d:release --path:src tests/test_bot.nim
 ```
 
-The full harness is `.github/workflows/ci.yml`: the tests in debug *and*
+The full harness is `.github/workflows/ci.yml`: the tests in debug _and_
 release, a real end-to-end episode in raw Docker with the certification
 fixture's seat mix (`tools/ci/docker_smoke.sh`), and the wasm bundle opened in
 headless chromium against the replay that episode just produced
@@ -135,3 +139,16 @@ Releases go through `.github/workflows/coworld-release.yml`
 MIT. See [`LICENSE`](LICENSE). Forked from
 [`Metta-AI/cogame-babel`](https://github.com/Metta-AI/cogame-babel); the floor
 and font assets come from [`Metta-AI/coworld-ctf`](https://github.com/Metta-AI/coworld-ctf).
+
+Player sockets must deliver a valid prompt/scripted or external profile before
+they can trigger model calls. Startup waits for profiles within the existing
+connect deadline; unregistered seats then use Mirror until a later valid profile.
+A registered game-owned prompt remains active after its socket disconnects.
+Only the current socket owner can update a profile or submit external actions.
+Private capture adds registration/fallback metadata outside the native view.
+
+Readiness component proof (local sentinel only; no teacher labels):
+
+```bash
+python tools/ci/native_capture_system.py --case readiness --game /path/to/ledger --player /path/to/ledger-player --output /tmp/ledger-readiness
+```

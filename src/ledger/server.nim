@@ -65,6 +65,7 @@ type
     awaiting: seq[bool]
     actions: seq[JsonNode]
     scripted: seq[ScriptKind]
+    policyReady: seq[bool]
     playerSockets: Table[int, WebSocket]
     socketSlots: Table[WebSocket, int]
     globalSockets: HashSet[WebSocket]
@@ -339,10 +340,11 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
     let connectDeadline = gameStart + config.playerConnectTimeoutSeconds
 
     while epochTime() < connectDeadline:
-      var allConnected = false
+      var allReady = true
       withLock stateLock:
-        allConnected = state.playerSockets.len >= config.tokens.len
-      if allConnected:
+        for ready in state.policyReady:
+          if not ready: allReady = false
+      if allReady:
         break
       sleep(200)
 
@@ -409,11 +411,17 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       var promptsCopy: seq[string]
       var externalCopy: seq[bool]
       var scriptedCopy: seq[ScriptKind]
+      var readyCopy: seq[bool]
       withLock stateLock:
         simCopy = state.sim
         promptsCopy = state.prompts
         externalCopy = state.external
         scriptedCopy = state.scripted
+        readyCopy = state.policyReady
+      # A socket/token is not a delivered policy. Preserve persistent state so
+      # a late valid profile applies on the next round snapshot.
+      for seat in seats:
+        if not readyCopy[seat]: scriptedCopy[seat] = skMirror
 
       var llmSeats = 0
       for seat in seats:
@@ -424,8 +432,18 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       if state.capture != nil:
         try:
           var observations: seq[JsonNode]
-          for seat in seats: observations.add(observationJson(simCopy, seat))
-          state.capture.beginCaptureRound(simCopy, observations, client.selection.selectionMetadata())
+          var registrations: seq[JsonNode]
+          for seat in seats:
+            observations.add(observationJson(simCopy, seat))
+            let origin = if not readyCopy[seat]: "unregistered_fallback"
+              elif externalCopy[seat]: "external"
+              elif scriptedCopy[seat] != skNone: "scripted"
+              else: "native"
+            registrations.add(%*{"registered": readyCopy[seat], "origin": origin,
+              "fallback_reason": (if readyCopy[seat]: newJNull()
+                else: %"unregistered_policy")})
+          state.capture.beginCaptureRound(simCopy, observations,
+            client.selection.selectionMetadata(), registrations)
         except CatchableError as error: state.capture.captureGap(simCopy.round, -1, error.msg)
 
       withLock stateLock:
@@ -644,6 +662,8 @@ proc websocketHandler(
       var slot = -1
       withLock stateLock:
         slot = state.socketSlots.getOrDefault(websocket, -1)
+        if slot >= 0 and state.playerSockets.getOrDefault(slot) != websocket:
+          slot = -1
       if slot < 0:
         return
       try:
@@ -652,10 +672,13 @@ proc websocketHandler(
           if payload["control"].getStr() != "external":
             raise newException(LedgerError, "unknown player control")
           withLock stateLock:
+            if state.playerSockets.getOrDefault(slot) != websocket: return
             state.external[slot] = true
+            state.policyReady[slot] = true
           echo "ledger: slot ", slot, " registered external action control"
         elif payload{"type"}.getStr() == "action":
           withLock stateLock:
+            if state.playerSockets.getOrDefault(slot) != websocket: return
             if state.external[slot] and state.awaiting[slot] and
                 payload["round"].getInt() == state.sim.round:
               let pair = state.sim.pairIndexOf(state.sim.round, slot)
@@ -664,6 +687,10 @@ proc websocketHandler(
               discard parseDecision(meeting.game, meeting.a == slot, action)
               state.actions[slot] = action
         elif payload{"type"}.getStr() == "prompt":
+          if not payload.hasKey("prompt") or payload["prompt"].kind != JString:
+            raise newException(LedgerError, "prompt must be a string")
+          if payload.hasKey("scripted") and payload["scripted"].kind != JString:
+            raise newException(LedgerError, "scripted must be a string")
           var prompt = payload{"prompt"}.getStr()
           ## Rune-safe: a byte slice here would cut a multi-byte character in
           ## half and the prompt would travel into the model call — and into
@@ -672,8 +699,10 @@ proc websocketHandler(
             prompt = prompt.runeSubStr(0, MaxPromptLen)
           let kind = parseScriptKind(payload{"scripted"}.getStr())
           withLock stateLock:
+            if state.playerSockets.getOrDefault(slot) != websocket: return
             state.prompts[slot] = prompt
             state.scripted[slot] = kind
+            state.policyReady[slot] = true
           echo "ledger: slot ", slot, " delivered a prompt (", prompt.len,
             " chars", (if kind != skNone: ", scripted " & $kind else: ""), ")"
       except CatchableError as error:
@@ -751,6 +780,7 @@ proc runGameServer*(config: GameConfig, runtimeConfig: RuntimeConfig) =
   state.awaiting = newSeq[bool](config.players.len)
   state.actions = newSeq[JsonNode](config.players.len)
   state.scripted = newSeq[ScriptKind](config.players.len)
+  state.policyReady = newSeq[bool](config.players.len)
   runtimeConfigGlobal = runtimeConfig
 
   let router = buildRouter(replayMode = false)

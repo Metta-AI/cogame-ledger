@@ -15,9 +15,20 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
+from typing import Any, TypedDict
 
-from websockets.sync.client import connect
 from websockets.exceptions import ConnectionClosed
+from websockets.sync.client import connect
+
+
+class PublicTrace(TypedDict):
+    messages: int
+    first: dict[str, Any] | None
+    last: dict[str, Any] | None
+    final: dict[str, Any] | None
+    closure: str | None
+    errors: list[str]
+    pings: list[dict[str, float]]
 
 
 def fixture_reply(case, round_index, slot, attempt, request):
@@ -85,7 +96,31 @@ def main():
     parser.add_argument("--player", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--case", choices=("ordinary", "off", "adversarial"), default="ordinary"
+        "--case",
+        choices=("ordinary", "off", "adversarial", "readiness"),
+        default="ordinary",
+    )
+    parser.add_argument(
+        "--readiness-scenario",
+        choices=(
+            "silent",
+            "missing",
+            "malformed",
+            "late",
+            "native",
+            "empty-native",
+            "disconnect",
+            "scripted",
+            "external",
+            "replacement",
+            "wrong-token",
+        ),
+        default="silent",
+    )
+    parser.add_argument(
+        "--expect-unregistered-model",
+        action="store_true",
+        help="RED only: retain old binary's unintended requests",
     )
     args = parser.parse_args()
     os.umask(0o077)
@@ -97,6 +132,12 @@ def main():
     ).copy()
     config.update(seed=1, tokens=[f"local-ledger-{i}" for i in range(8)])
     assert config["rounds"] == 14 and config["minRoundIntervalMs"] == 20000
+    component = args.case == "readiness"
+    if component:
+        config.update(
+            rounds=4, minRoundIntervalMs=2000, player_connect_timeout_seconds=1
+        )
+    expected_rounds = config["rounds"]
     (output / "config.json").write_text(json.dumps(config))
     (output / "frozen-fixture-source.py").write_bytes(Path(__file__).read_bytes())
     calls, errors = [], []
@@ -105,7 +146,7 @@ def main():
     lock = threading.Lock()
 
     class Sentinel(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *_):
+        def log_message(self, format: str, *_args: object) -> None:
             pass
 
         def do_POST(self):
@@ -119,17 +160,16 @@ def main():
                 assert 0 <= slot < 8
                 assert request["model"] == "local/ledger-sentinel"
                 assert request["max_tokens"] == 900
-                assert (
-                    f"local-ledger-operator-{slot}" in request["messages"][0]["content"]
-                )
-                round_index = (
-                    int(
-                        re.search(
-                            r"Round (\d+) of", request["messages"][0]["content"]
-                        ).group(1)
+                if not component:
+                    assert (
+                        f"local-ledger-operator-{slot}"
+                        in request["messages"][0]["content"]
                     )
-                    - 1
+                round_match = re.search(
+                    r"Round (\d+) of", request["messages"][0]["content"]
                 )
+                assert round_match is not None
+                round_index = int(round_match.group(1)) - 1
                 attempt_index = attempt_counts.get((round_index, slot), 0)
                 attempt_counts[round_index, slot] = attempt_index + 1
                 text, status, padding, extra_headers = fixture_reply(
@@ -204,9 +244,12 @@ def main():
         json.dumps({"parent": sorted(clean), "game": sorted(env)}, indent=2)
     )
     processes, logs = [], []
+    policy_sockets = []
+    control_trace: list[dict[str, str | float | int]] = []
+    control_threads = []
     started = time.monotonic()
     measurements = (output / "resources.jsonl").open("w")
-    public = {
+    public: PublicTrace = {
         "messages": 0,
         "first": None,
         "last": None,
@@ -278,32 +321,226 @@ def main():
                     # A closure before final state remains a real proof failure.
                     if public["final"] is None:
                         public["errors"].append(str(error))
-                except Exception as error:
+                except (OSError, ValueError, TypeError, RuntimeError) as error:
                     public["errors"].append(repr(error))
 
             reader = threading.Thread(target=drain_public, daemon=True)
             reader.start()
             last_ping = time.monotonic()
-            for slot in range(8):
-                player_env = clean | {
-                    "COWORLD_PLAYER_WS_URL": f"ws://127.0.0.1:{port}/player?slot={slot}&token=local-ledger-{slot}",
-                    "PLAYER_PROMPT": f"local-ledger-operator-{slot}",
-                }
-                log = (output / f"player-{slot}.log").open("w")
-                logs.append(log)
-                processes.append(
-                    subprocess.Popen(
-                        [str(args.player.resolve())],
-                        env=player_env,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
+            if component:
+
+                def join(slot, token=None):
+                    wire = connect(
+                        f"ws://127.0.0.1:{port}/player?slot={slot}&token={token or 'local-ledger-' + str(slot)}",
+                        open_timeout=3,
                     )
-                )
+                    welcome = json.loads(wire.recv(timeout=3))
+                    assert welcome["type"] == "welcome" and welcome["slot"] == slot
+                    policy_sockets.append(wire)
+                    control_trace.append(
+                        {"event": "welcome", "slot": slot, "at": time.monotonic()}
+                    )
+                    return wire
+
+                def profile(wire, slot, scripted="mirror", prompt=None):
+                    actual_prompt = (
+                        f"local-ledger-operator-{slot}" if prompt is None else prompt
+                    )
+                    wire.send(
+                        json.dumps(
+                            {
+                                "type": "prompt",
+                                "prompt": actual_prompt,
+                                "scripted": scripted,
+                            }
+                        )
+                    )
+                    control_trace.append(
+                        {
+                            "event": "profile-sent",
+                            "slot": slot,
+                            "wire_identity": id(wire),
+                            "scripted": scripted,
+                            "prompt": actual_prompt,
+                            "at": time.monotonic(),
+                        }
+                    )
+
+                mode = args.readiness_scenario
+                if mode == "wrong-token":
+                    # Preserve the actual denial bytes: Mummy's existing 401
+                    # status line omits a reason phrase rejected by websockets.
+                    with socket.create_connection(
+                        ("127.0.0.1", port), timeout=3
+                    ) as probe:
+                        probe.sendall(
+                            (
+                                "GET /player?slot=0&token=wrong-token HTTP/1.1\r\n"
+                                f"Host: 127.0.0.1:{port}\r\n"
+                                "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+                                "Sec-WebSocket-Version: 13\r\n"
+                                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+                            ).encode()
+                        )
+                        denial = bytearray()
+                        while b"\r\n\r\n" not in denial:
+                            part = probe.recv(4096)
+                            if not part:
+                                break
+                            denial.extend(part)
+                            assert len(denial) <= 8192
+                    (output / "wrong-token-response.raw").write_bytes(denial)
+                    assert bytes(denial).split(b"\r\n", 1)[0].split()[:2] == [
+                        b"HTTP/1.1",
+                        b"401",
+                    ]
+                    assert b'"welcome"' not in denial
+                    control_trace.append(
+                        {
+                            "event": "wrong-token-rejected401-raw",
+                            "qualification": "existing missing reason phrase retained",
+                        }
+                    )
+                wires = {}
+                for slot in range(8):
+                    if mode == "missing" and slot == 0:
+                        continue
+                    wires[slot] = join(slot)
+                    if mode == "silent":
+                        continue
+                    if slot == 0 and mode == "malformed":
+                        wires[slot].send(
+                            json.dumps(
+                                {"type": "prompt", "prompt": 123, "scripted": "mirror"}
+                            )
+                        )
+                    elif slot == 0 and mode == "late":
+                        pass
+                    elif slot == 0 and mode == "external":
+                        wires[slot].send(
+                            json.dumps({"type": "register", "control": "external"})
+                        )
+                    elif slot == 0 and mode == "replacement":
+                        profile(wires[slot], slot, "")
+                        current = join(slot)
+                        profile(current, slot, "mirror")
+                        # All three stale-owner mutation paths are real wire messages.
+                        profile(wires[slot], slot, "", "obsolete-owner-must-not-apply")
+                        wires[slot].send(
+                            json.dumps({"type": "register", "control": "external"})
+                        )
+                        wires[slot].send(
+                            json.dumps(
+                                {
+                                    "type": "action",
+                                    "round": 0,
+                                    "action": {"move": 0, "note": "", "memo": ""},
+                                }
+                            )
+                        )
+                    elif slot == 0 and mode in ("native", "disconnect", "empty-native"):
+                        profile(
+                            wires[slot],
+                            slot,
+                            "",
+                            "" if mode == "empty-native" else None,
+                        )
+                    elif slot == 7 and mode == "late":
+                        profile(wires[slot], slot, "")
+                    else:
+                        profile(
+                            wires[slot],
+                            slot,
+                            "arbitrary-mirror-name" if mode == "scripted" else "mirror",
+                        )
+                if mode in ("late", "disconnect"):
+
+                    def after_first_request():
+                        limit = time.monotonic() + 10
+                        while (
+                            not calls
+                            and time.monotonic() < limit
+                            and game.poll() is None
+                        ):
+                            time.sleep(0.005)
+                        assert calls, "no native request to synchronize late/disconnect"
+                        control_trace.append(
+                            {
+                                "event": mode,
+                                "after_request_round": calls[0]["round"],
+                                "at": time.monotonic(),
+                            }
+                        )
+                        if mode == "late":
+                            profile(wires[0], 0, "")
+                        else:
+                            wires[0].close()
+
+                    t = threading.Thread(target=after_first_request, daemon=True)
+                    t.start()
+                    control_threads.append(t)
+                if mode == "external":
+
+                    def external_actions():
+                        try:
+                            while game.poll() is None:
+                                try:
+                                    message = json.loads(wires[0].recv(timeout=1))
+                                except TimeoutError:
+                                    continue
+                                if message.get("type") == "observation":
+                                    wires[0].send(
+                                        json.dumps(
+                                            {
+                                                "type": "action",
+                                                "round": message["round"],
+                                                "action": {
+                                                    "move": 0,
+                                                    "note": "",
+                                                    "memo": "",
+                                                },
+                                            }
+                                        )
+                                    )
+                                    control_trace.append(
+                                        {
+                                            "event": "external-action",
+                                            "round": message["round"],
+                                        }
+                                    )
+                        except ConnectionClosed:
+                            pass
+
+                    t = threading.Thread(target=external_actions, daemon=True)
+                    t.start()
+                    control_threads.append(t)
+                if mode == "empty-native":
+                    (output / "operator-map.json").write_text(json.dumps({"0": ""}))
+            else:
+                for slot in range(8):
+                    player_env = clean | {
+                        "COWORLD_PLAYER_WS_URL": f"ws://127.0.0.1:{port}/player?slot={slot}&token=local-ledger-{slot}",
+                        "PLAYER_PROMPT": f"local-ledger-operator-{slot}",
+                    }
+                    log = (output / f"player-{slot}.log").open("w")
+                    logs.append(log)
+                    processes.append(
+                        subprocess.Popen(
+                            [str(args.player.resolve())],
+                            env=player_env,
+                            stdout=log,
+                            stderr=subprocess.STDOUT,
+                        )
+                    )
             while game.poll() is None:
                 elapsed = time.monotonic() - started
                 size = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
                 free = shutil.disk_usage(output).free
-                assert elapsed < 360 and size < 128 * 2**20 and free >= 2 * 2**30
+                assert (
+                    elapsed < (45 if component else 360)
+                    and size < 128 * 2**20
+                    and free >= 2 * 2**30
+                )
                 if public["final"] is None and time.monotonic() - last_ping >= 20:
                     ping_started = time.monotonic()
                     assert viewer.ping(b"local-throughout-model").wait(timeout=3)
@@ -340,15 +577,19 @@ def main():
         for process in processes[1:]:
             assert process.wait(timeout=10) == 0
         result = json.loads((output / "results.json").read_text())
-        assert result["reason"] == "complete" and result["rounds"] == 14, result
-        assert not errors and 112 <= len(calls) <= 224, (errors, len(calls))
-        for round_index in range(14):
+        assert result["reason"] == "complete" and result["rounds"] == expected_rounds, (
+            result
+        )
+        assert not errors, errors
+        if not component:
+            assert 112 <= len(calls) <= 224, len(calls)
+        for round_index in range(expected_rounds if not component else 0):
             assert {
                 c["slot"]
                 for c in calls
                 if c["round"] == round_index and c["attempt_index"] == 0
             } == set(range(8))
-        if args.case != "adversarial":
+        if args.case not in ("adversarial", "readiness"):
             assert len(calls) == 112
         replay = (output / "replay.json").read_bytes()
         assert (
@@ -356,11 +597,12 @@ def main():
             and b"X-Softmax-Llm-Call-Id" not in replay
         )
         proof = {
-            "native_rounds": 14,
-            "native_decisions": 112,
+            "native_rounds": expected_rounds,
+            "native_decisions": expected_rounds * 8,
             "fixture_http_calls": len(calls),
             "real_provider_calls": 0,
-            "native_min_round_interval_ms": 20000,
+            "native_min_round_interval_ms": config["minRoundIntervalMs"],
+            "component_only": component,
             "elapsed_seconds": time.monotonic() - started,
             "replay_sha256": hashlib.sha256(replay).hexdigest(),
             "clocks_unchanged": True,
@@ -382,7 +624,7 @@ def main():
             for line in (output / "trajectory.jsonl").read_text().splitlines()
         ]
         decisions = [row for row in rows if "action_status" in row]
-        assert len(decisions) == 112
+        assert len(decisions) == expected_rounds * 8
         by_id = {call["id"]: call for call in calls}
         accepted = rejected = fallback = 0
         for row in decisions:
@@ -442,6 +684,75 @@ def main():
                 c["status"] == 500 for c in calls
             )
             assert len(calls) > 112
+        if component:
+            if args.expect_unregistered_model:
+                assert args.readiness_scenario == "silent" and len(calls) > 0
+                proof["RED_unregistered_model_requests"] = len(calls)
+            else:
+                mode = args.readiness_scenario
+                expected_calls = (
+                    7
+                    if mode == "late"
+                    else 4
+                    if mode in ("native", "empty-native", "disconnect")
+                    else 0
+                )
+                assert len(calls) == expected_calls, (mode, len(calls), expected_calls)
+                if mode == "late":
+                    assert {(c["slot"], c["round"]) for c in calls} == {
+                        (7, r) for r in range(4)
+                    } | {(0, r) for r in range(1, 4)}
+                for row in decisions:
+                    metadata = row["observation"]["policy_registration"]
+                    assert type(metadata["registered"]) is bool
+                    seat = int(row["seat"])
+                    round_index = int(row["decision_id"].split("-")[0])
+                    expected_ready = not (
+                        mode == "silent"
+                        or (mode in ("missing", "malformed") and seat == 0)
+                        or (mode == "late" and seat == 0 and round_index == 0)
+                    )
+                    assert metadata["registered"] is expected_ready, (
+                        mode,
+                        seat,
+                        round_index,
+                        metadata,
+                    )
+                    if expected_ready and (
+                        seat == 0
+                        and mode in ("native", "empty-native", "disconnect")
+                        or mode == "late"
+                        and (seat == 7 or seat == 0 and round_index > 0)
+                    ):
+                        assert metadata["origin"] == "native"
+                    model_attempts = [
+                        a for a in row["attempts"] if a["origin"] == "model"
+                    ]
+                    if not metadata["registered"]:
+                        assert (
+                            metadata["origin"] == "unregistered_fallback"
+                            and metadata["fallback_reason"] == "unregistered_policy"
+                        )
+                        assert not model_attempts and row["action_status"] == "fallback"
+                    if mode in ("scripted", "replacement", "wrong-token"):
+                        assert metadata == {
+                            "registered": True,
+                            "origin": "scripted",
+                            "fallback_reason": None,
+                        }
+                    if mode == "external" and row["seat"] == "0":
+                        assert (
+                            metadata["registered"] and metadata["origin"] == "external"
+                        )
+                if mode == "external":
+                    assert (
+                        sum(x["event"] == "external-action" for x in control_trace) == 4
+                    )
+                proof["readiness_scenario"] = mode
+                proof["registered_native_disconnect_preserved"] = mode == "disconnect"
+            (output / "control-trace.json").write_text(
+                json.dumps(control_trace, indent=2) + "\n"
+            )
         proof.update(
             exact_raw_applied_accepted=accepted,
             rejected=rejected,
@@ -452,6 +763,11 @@ def main():
         print(json.dumps(proof))
     finally:
         stop_reader.set()
+        for wire in policy_sockets:
+            try:
+                wire.close()
+            except ConnectionClosed:
+                pass
         for process in processes:
             if process.poll() is None:
                 process.terminate()

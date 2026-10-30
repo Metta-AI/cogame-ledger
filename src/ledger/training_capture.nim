@@ -239,7 +239,8 @@ proc captureGap*(capture: RuntimeCapture, round, seat: int, reason: string) =
     if gaps.len < 8: gaps.add(%safeDiagnostic(reason))
 
 proc beginCaptureRound*(capture: RuntimeCapture, sim: Sim,
-    observations: seq[JsonNode], selection: JsonNode) =
+    observations: seq[JsonNode], selection: JsonNode,
+    registrations: seq[JsonNode] = @[]) =
   if capture == nil: return
   if sim.round < 0 or sim.round >= MaxRounds or observations.len != Seats:
     raise newException(ValueError, "invalid native capture round")
@@ -258,6 +259,10 @@ proc beginCaptureRound*(capture: RuntimeCapture, sim: Sim,
         "attempt_diagnostics": [], "native_events": [],
         "receipt_authority": "external authenticated receipt/source/image/slot joins required",
         "latency_scope": "makeRequests dispatch-to-batch-reader join; per-transfer timing unavailable"}))
+    if registrations.len > 0:
+      if registrations.len != Seats:
+        raise newException(ValueError, "registration metadata must align with seats")
+      decisions[^1].observation["policy_registration"] = copy(registrations[seat])
     if view.kind == JNull:
       decisions[^1].observation["capture_gaps"].add(%"episode private payload bound exceeded; view unavailable")
   capture.rounds[sim.round] = decisions

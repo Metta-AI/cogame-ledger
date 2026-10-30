@@ -128,6 +128,30 @@ if paramCount() == 1:
     let scripted = if first: nativeMeeting.scriptedA else: nativeMeeting.scriptedB
     doAssert observation["memo_after"].getStr() == memoAfter
     doAssert observation["gossip_event"] == gossip
+    let registration = observation{"policy_registration"}
+    if registration != nil:
+      doAssert registration.kind == JObject
+      doAssert registration["registered"].kind == JBool
+      doAssert registration["origin"].kind == JString
+      let ready = registration["registered"].getBool()
+      let origin = registration["origin"].getStr()
+      if not ready:
+        doAssert origin == "unregistered_fallback"
+        doAssert registration["fallback_reason"].getStr() == "unregistered_policy"
+        doAssert scripted and row["action_status"].getStr() == "fallback"
+        doAssert move == scriptedAction(before, seat, skMirror).move
+      else:
+        doAssert origin in ["native", "scripted", "external"]
+        doAssert registration["fallback_reason"].kind == JNull
+      for attempt in row["attempts"]:
+        if attempt["origin"].getStr() == "model":
+          doAssert ready and origin == "native"
+      # Fallback rows legitimately select the existing non-model fallback attempt.
+      if row["selected_attempt_id"].kind == JString:
+        for attempt in row["attempts"]:
+          if attempt["attempt_id"] == row["selected_attempt_id"] and
+              attempt["origin"].getStr() == "model":
+            doAssert ready and origin == "native"
     let actual = row["executed_action"]
     doAssert actual.kind == JObject and actual["move"].getInt() == move
     if scripted:
@@ -139,7 +163,11 @@ if paramCount() == 1:
       let request = attempt["request"]
       if request.kind != JObject: continue
       doAssert request["system"].getStr() == systemPrompt(selection, before, seat)
-      var expectedUser = before.userPrompt(seat, "local-ledger-operator-" & $seat)
+      var operator = "local-ledger-operator-" & $seat
+      if fileExists(directory / "operator-map.json"):
+        let operators = parseFile(directory / "operator-map.json")
+        if operators.hasKey($seat): operator = operators[$seat].getStr()
+      var expectedUser = before.userPrompt(seat, operator)
       if attemptIndex > 0:
         expectedUser.add("\nYour previous reply was invalid. Respond with ONLY the " &
           "requested JSON object, with \"move\" " & legalForm(meeting.game, meeting.a == seat) & ".")
