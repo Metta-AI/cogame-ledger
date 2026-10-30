@@ -30,7 +30,8 @@ import
   mummy,
   mummy/routers,
   llm,
-  sim
+  sim,
+  training_capture
 
 const
   MaxPromptLen = 4000
@@ -69,6 +70,7 @@ type
     globalSockets: HashSet[WebSocket]
     started: bool
     finished: bool
+    capture: RuntimeCapture
 
 var
   stateLock: Lock
@@ -303,6 +305,9 @@ proc finishEpisode(runtimeConfig: RuntimeConfig) =
 
   sleep(500)
   echo "ledger: writing results and replay"
+  if state.capture != nil:
+    try: state.capture.finishCapture(results)
+    except CatchableError as error: state.capture.captureGap(-1, -1, error.msg)
   writeArtifact(
     runtimeConfig.resultsUri, $results, "application/json",
     "COGAME_RESULTS_METHOD"
@@ -416,6 +421,13 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
             scriptedCopy[seat] == skNone and not client.disabled:
           inc llmSeats
 
+      if state.capture != nil:
+        try:
+          var observations: seq[JsonNode]
+          for seat in seats: observations.add(observationJson(simCopy, seat))
+          state.capture.beginCaptureRound(simCopy, observations, client.selection.selectionMetadata())
+        except CatchableError as error: state.capture.captureGap(simCopy.round, -1, error.msg)
+
       withLock stateLock:
         for seat in seats:
           if externalCopy[seat]:
@@ -437,7 +449,7 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
       ## the lock on a snapshot; only this thread mutates the sim, so the
       ## snapshot cannot go stale.
       var decisions = client.decideAll(simCopy, seats, promptsCopy,
-        scriptedCopy)
+        scriptedCopy, state.capture)
 
       let actionDeadline = epochTime() + config.llmTimeoutSeconds.float
       while epochTime() < actionDeadline:
@@ -477,9 +489,11 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
           notes[seat] = decisions[seat].note
           memos[seat] = decisions[seat].memo
         ## Steps 4-8: one transactional apply.
+        var roundReplayed = false
         try:
           state.sim.applyRound(moves, notes, memos, flags)
         except LedgerError as error:
+          roundReplayed = true
           echo "ledger: round rejected (", error.msg,
             "); replaying it on the scripted baseline"
           var safeMoves: array[Meetings, array[2, int]]
@@ -492,6 +506,12 @@ proc runGame(runtimeConfig: RuntimeConfig) {.gcsafe.} =
             safeFlags[pair] = [true, true]
           state.sim.applyRound(safeMoves, newSeq[string](Seats),
             newSeq[string](Seats), safeFlags)
+        if state.capture != nil:
+          try:
+            state.capture.appliedCaptureRound(state.sim,
+              (if roundReplayed: newSeq[string](Seats) else: notes),
+              (if roundReplayed: newSeq[string](Seats) else: memos))
+          except CatchableError as error: state.capture.captureGap(state.sim.round, -1, error.msg)
         for pair in 0 ..< Meetings:
           echo "ledger: round ", state.sim.round + 1, " ",
             meetingLog(state.sim, pair)
@@ -722,6 +742,10 @@ proc runGameServer*(config: GameConfig, runtimeConfig: RuntimeConfig) =
     raise newException(LedgerError, "tokens and players must align")
   state.config = config
   state.sim = initSim(config)
+  try: state.capture = newRuntimeCapture(state.sim)
+  except CatchableError as error:
+    state.capture = nil
+    echo "ledger capture initialization failed; capture disabled: ", safeDiagnostic(error.msg)
   state.prompts = newSeq[string](config.players.len)
   state.external = newSeq[bool](config.players.len)
   state.awaiting = newSeq[bool](config.players.len)
