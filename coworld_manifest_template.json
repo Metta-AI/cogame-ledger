@@ -20,9 +20,7 @@
     "runnable": {
       "type": "game",
       "image": "{{LEDGER_IMAGE}}",
-      "run": [
-        "/bin/ledger"
-      ],
+      "run": ["/bin/ledger"],
       "env": {},
       "source_url": "https://github.com/Metta-AI/cogame-ledger/tree/main"
     },
@@ -30,10 +28,7 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "tokens",
-        "players"
-      ],
+      "required": ["tokens", "players"],
       "properties": {
         "tokens": {
           "description": "One connection token per player slot, indexed by slot.",
@@ -53,9 +48,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "name"
-            ],
+            "required": ["name"],
             "properties": {
               "name": {
                 "type": "string",
@@ -243,10 +236,7 @@
         "reason": {
           "description": "How the episode ended: complete (all rounds played) or deadline (play budget; scores use the rounds played).",
           "type": "string",
-          "enum": [
-            "complete",
-            "deadline"
-          ]
+          "enum": ["complete", "deadline"]
         }
       }
     },
@@ -292,9 +282,7 @@
       "type": "player",
       "description": "Reference Ledger player with external action, legacy prompt, and scripted modes.",
       "image": "{{LEDGER_IMAGE}}",
-      "run": [
-        "/bin/ledger-player"
-      ],
+      "run": ["/bin/ledger-player"],
       "resources": {
         "requests": {
           "cpu": "100m",
@@ -312,9 +300,7 @@
       "type": "player",
       "description": "The scripted reciprocator as a fieldable policy: cooperates first, then plays back the partner's most recent public dilemma move, forgives a single lapse one time in five, invests 4 and returns 50% against a clean halo and 1 / 25% against a dirty one, offers 5 and holds a floor of 4. No LLM involved.",
       "image": "{{LEDGER_IMAGE}}",
-      "run": [
-        "/bin/ledger-player"
-      ],
+      "run": ["/bin/ledger-player"],
       "env": {
         "PLAYER_SCRIPTED": "mirror"
       },
@@ -335,9 +321,7 @@
       "type": "player",
       "description": "The greedy foil reputation is supposed to punish: always defects, sends 0 and returns 0, offers 1 and accepts nearly anything. It scores well early and its record follows it. No LLM involved.",
       "image": "{{LEDGER_IMAGE}}",
-      "run": [
-        "/bin/ledger-player"
-      ],
+      "run": ["/bin/ledger-player"],
       "env": {
         "PLAYER_SCRIPTED": "shark"
       },
@@ -465,10 +449,10 @@
     },
     "players": [
       {
-        "player_id": "ledger-player"
+        "player_id": "ledger-mirror"
       },
       {
-        "player_id": "ledger-mirror"
+        "player_id": "ledger-player"
       },
       {
         "player_id": "ledger-shark"
